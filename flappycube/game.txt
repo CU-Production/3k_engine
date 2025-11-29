@@ -1,53 +1,44 @@
-# Flappy Cube Game Scene
-# Player (Yellow Cube)
-entity 0 0
+# Scene File
+entity 8 3
   transform -200 0 0 1 1
-  sprite 1.0 1.0 0.2 1 35 35
-  rigidbody 2 1 0.8 0.0 0.0
+  sprite 1 1 0.2 1 35 35
+  rigidbody 2 1 0.8 0 0
   script flappycube/player.lua
-# Ground
-entity 1 0
+entity 7 3
   transform 0 -320 0 1 1
   sprite 0.3 0.5 0.3 1 1000 60
-  rigidbody 0 0 1.0 0.5 0.0
-# Ceiling
-entity 2 0
+  rigidbody 0 0 1 0.5 0
+entity 6 3
   transform 0 320 0 1 1
   sprite 0.3 0.5 0.3 1 1000 60
-  rigidbody 0 0 1.0 0.5 0.0
-# Pipe 1 Top
-entity 3 0
-  transform 150 150 0 1 1
-  sprite 0.2 0.8 0.2 1 60 400
-  rigidbody 1 0 1.0 0.5 0.0
-  script flappycube/pipe.lua
-# Pipe 1 Bottom
-entity 4 0
-  transform 150 -150 0 1 1
+  rigidbody 0 0 1 0.5 0
+entity 5 3
+  transform 150 180 0 1 1
   sprite 0.2 0.8 0.2 1 60 280
-  rigidbody 1 0 1.0 0.5 0.0
+  rigidbody 1 0 1 0.5 0
   script flappycube/pipe.lua
-# Pipe 2 Top
-entity 5 0
-  transform 400 100 0 1 1
-  sprite 0.2 0.8 0.2 1 60 440
-  rigidbody 1 0 1.0 0.5 0.0
+entity 4 3
+  transform 150 -180 0 1 1
+  sprite 0.2 0.8 0.2 1 60 280
+  rigidbody 1 0 1 0.5 0
   script flappycube/pipe.lua
-# Pipe 2 Bottom
-entity 6 0
+entity 3 3
+  transform 400 180 0 1 1
+  sprite 0.2 0.8 0.2 1 60 280
+  rigidbody 1 0 1 0.5 0
+  script flappycube/pipe.lua
+entity 2 3
   transform 400 -180 0 1 1
-  sprite 0.2 0.8 0.2 1 60 220
-  rigidbody 1 0 1.0 0.5 0.0
+  sprite 0.2 0.8 0.2 1 60 280
+  rigidbody 1 0 1 0.5 0
   script flappycube/pipe.lua
-# Pipe 3 Top
-entity 7 0
-  transform 650 80 0 1 1
-  sprite 0.2 0.8 0.2 1 60 460
-  rigidbody 1 0 1.0 0.5 0.0
+entity 0 4
+  transform 650 180 0 1 1
+  sprite 0.2 0.8 0.2 1 60 280
+  rigidbody 1 0 1 0.5 0
   script flappycube/pipe.lua
-# Pipe 3 Bottom
-entity 8 0
-  transform 650 -200 0 1 1
-  sprite 0.2 0.8 0.2 1 60 200
-  rigidbody 1 0 1.0 0.5 0.0
+entity 1 4
+  transform 650 -180 0 1 1
+  sprite 0.2 0.8 0.2 1 60 280
+  rigidbody 1 0 1 0.5 0
   script flappycube/pipe.lua

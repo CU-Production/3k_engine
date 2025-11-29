@@ -595,7 +595,7 @@ void init(void) {
             t->position.Y = y;
         }
     });
-    
+
     state.lua->set_function("get_velocity", [](uint32_t entity_id, uint32_t generation) -> sol::optional<sol::table> {
         EntityId e = {entity_id, generation};
         Rigidbody* rb = state.registry.rigidbodies.get(e);
