@@ -70,8 +70,14 @@ struct Sprite {
 
 struct Rigidbody {
     b2BodyId body;
+    b2BodyType body_type;
+    bool fixed_rotation;
+    float density;
+    float friction;
+    float restitution;
     
-    Rigidbody() : body(b2_nullBodyId) {}
+    Rigidbody() : body(b2_nullBodyId), body_type(b2_dynamicBody), 
+                  fixed_rotation(false), density(1.0f), friction(0.3f), restitution(0.0f) {}
 };
 
 struct Script {
@@ -243,6 +249,13 @@ struct SceneSerializer {
                      << sprite->size.X << " " << sprite->size.Y << "\n";
             }
             
+            Rigidbody* rb = reg.rigidbodies.get(e);
+            if (rb) {
+                file << "  rigidbody " << (int)rb->body_type << " " 
+                     << (rb->fixed_rotation ? 1 : 0) << " "
+                     << rb->density << " " << rb->friction << " " << rb->restitution << "\n";
+            }
+            
             Script* script = reg.scripts.get(e);
             if (script && !script->path.empty()) {
                 file << "  script " << script->path << "\n";
@@ -254,18 +267,33 @@ struct SceneSerializer {
     }
     
     static bool load(const char* path, Registry& reg, b2WorldId world) {
+        std::string content;
+        
+        // Try PhysFS first
         PHYSFS_File* pfile = PHYSFS_openRead(path);
-        if (!pfile) return false;
+        if (pfile) {
+            PHYSFS_sint64 filesize = PHYSFS_fileLength(pfile);
+            if (filesize > 0) {
+                std::vector<char> buffer(filesize + 1);
+                PHYSFS_readBytes(pfile, buffer.data(), filesize);
+                buffer[filesize] = '\0';
+                content = buffer.data();
+            }
+            PHYSFS_close(pfile);
+        } else {
+            // Fallback to std::ifstream for absolute paths
+            std::ifstream file(path);
+            if (!file.is_open()) return false;
+            
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            content = buffer.str();
+            file.close();
+        }
         
-        PHYSFS_sint64 filesize = PHYSFS_fileLength(pfile);
-        if (filesize <= 0) { PHYSFS_close(pfile); return false; }
+        if (content.empty()) return false;
         
-        std::vector<char> buffer(filesize + 1);
-        PHYSFS_readBytes(pfile, buffer.data(), filesize);
-        buffer[filesize] = '\0';
-        PHYSFS_close(pfile);
-        
-        std::istringstream iss(buffer.data());
+        std::istringstream iss(content);
         std::string line;
         EntityId current_entity = NULL_ENTITY;
         
@@ -286,6 +314,36 @@ struct SceneSerializer {
                 Sprite s;
                 lss >> s.color.X >> s.color.Y >> s.color.Z >> s.color.W >> s.size.X >> s.size.Y;
                 reg.sprites.add(current_entity, s);
+            } else if (cmd == "rigidbody" && current_entity != NULL_ENTITY) {
+                Rigidbody rb;
+                int body_type_int, fixed_rot_int;
+                lss >> body_type_int >> fixed_rot_int >> rb.density >> rb.friction >> rb.restitution;
+                rb.body_type = (b2BodyType)body_type_int;
+                rb.fixed_rotation = (fixed_rot_int != 0);
+                
+                // Create Box2D body
+                b2BodyDef bodyDef = b2DefaultBodyDef();
+                Transform* t = reg.transforms.get(current_entity);
+                if (t) {
+                    bodyDef.position = b2Vec2{t->position.X, t->position.Y};
+                    bodyDef.rotation = b2MakeRot(t->rotation);
+                }
+                bodyDef.type = rb.body_type;
+                bodyDef.fixedRotation = rb.fixed_rotation;
+                rb.body = b2CreateBody(world, &bodyDef);
+                
+                // Add a box shape
+                Sprite* sprite = reg.sprites.get(current_entity);
+                float hw = sprite ? sprite->size.X * 0.5f : 50.0f;
+                float hh = sprite ? sprite->size.Y * 0.5f : 50.0f;
+                b2Polygon box = b2MakeBox(hw, hh);
+                b2ShapeDef shapeDef = b2DefaultShapeDef();
+                shapeDef.density = rb.density;
+                shapeDef.material.friction = rb.friction;
+                shapeDef.material.restitution = rb.restitution;
+                b2CreatePolygonShape(rb.body, &shapeDef, &box);
+                
+                reg.rigidbodies.add(current_entity, rb);
             } else if (cmd == "script" && current_entity != NULL_ENTITY) {
                 Script sc;
                 lss >> sc.path;
@@ -808,6 +866,29 @@ void frame(void) {
                 if (ImGui::CollapsingHeader("Rigidbody", ImGuiTreeNodeFlags_DefaultOpen)) {
                     bool has_body = b2Body_IsValid(rb->body);
                     ImGui::Text("Box2D Body: %s", has_body ? "Valid" : "None");
+                    
+                    // Body type
+                    const char* body_types[] = { "Static", "Kinematic", "Dynamic" };
+                    int current_type = (int)rb->body_type;
+                    if (ImGui::Combo("Body Type", &current_type, body_types, 3)) {
+                        rb->body_type = (b2BodyType)current_type;
+                        if (has_body) {
+                            b2Body_SetType(rb->body, rb->body_type);
+                        }
+                    }
+                    
+                    // Fixed rotation
+                    if (ImGui::Checkbox("Fixed Rotation", &rb->fixed_rotation)) {
+                        if (has_body) {
+                            b2Body_SetFixedRotation(rb->body, rb->fixed_rotation);
+                        }
+                    }
+                    
+                    // Physics properties
+                    ImGui::DragFloat("Density", &rb->density, 0.1f, 0.0f, 100.0f);
+                    ImGui::DragFloat("Friction", &rb->friction, 0.01f, 0.0f, 1.0f);
+                    ImGui::DragFloat("Restitution", &rb->restitution, 0.01f, 0.0f, 1.0f);
+                    
                     if (!has_body && ImGui::Button("Create Box2D Body")) {
                         b2BodyDef bodyDef = b2DefaultBodyDef();
                         Transform* t = state.registry.transforms.get(state.selected_entity);
@@ -815,14 +896,22 @@ void frame(void) {
                             bodyDef.position = b2Vec2{t->position.X, t->position.Y};
                             bodyDef.rotation = b2MakeRot(t->rotation);
                         }
-                        bodyDef.type = b2_dynamicBody;
+                        bodyDef.type = rb->body_type;
+                        bodyDef.fixedRotation = rb->fixed_rotation;
                         rb->body = b2CreateBody(state.world, &bodyDef);
                         
                         // Add a box shape
-                        b2Polygon box = b2MakeBox(50.0f, 50.0f);
+                        Sprite* sprite = state.registry.sprites.get(state.selected_entity);
+                        float hw = sprite ? sprite->size.X * 0.5f : 50.0f;
+                        float hh = sprite ? sprite->size.Y * 0.5f : 50.0f;
+                        b2Polygon box = b2MakeBox(hw, hh);
                         b2ShapeDef shapeDef = b2DefaultShapeDef();
-                        shapeDef.density = 1.0f;
+                        shapeDef.density = rb->density;
+                        shapeDef.material.friction = rb->friction;
+                        shapeDef.material.restitution = rb->restitution;
                         b2CreatePolygonShape(rb->body, &shapeDef, &box);
+                        
+                        log_console("Created Box2D body for entity " + std::to_string(state.selected_entity.id));
                     }
                 }
             } else {
