@@ -84,8 +84,9 @@ struct Script {
     std::string path;
     sol::table instance; // Lua table instance
     bool loaded;
+    EntityId entity; // Reference to owner entity
     
-    Script() : path(""), loaded(false) {}
+    Script() : path(""), loaded(false), entity(NULL_ENTITY) {}
 };
 
 struct Camera {
@@ -381,8 +382,9 @@ bool InputSystem::mouse_buttons[3] = {};
 
 // Script System
 struct ScriptSystem {
-    static void load_script(Script& script, sol::state* lua) {
+    static void load_script(Script& script, sol::state* lua, EntityId e, Registry& reg) {
         if (script.path.empty() || script.loaded) return;
+        script.entity = e;
         
         PHYSFS_File* file = PHYSFS_openRead(script.path.c_str());
         if (!file) return;
@@ -402,6 +404,15 @@ struct ScriptSystem {
                 if (result.valid()) {
                     script.instance = result;
                     script.loaded = true;
+                    
+                    // Set entity reference in script
+                    script.instance["entity_id"] = e.id;
+                    
+                    // Call init if exists
+                    sol::optional<sol::function> init_fn = script.instance["init"];
+                    if (init_fn) {
+                        (*init_fn)();
+                    }
                 }
             }
         } catch (const std::exception& e) {
@@ -412,7 +423,7 @@ struct ScriptSystem {
     static void update_scripts(Registry& reg, sol::state* lua, float dt) {
         reg.scripts.each([&](EntityId e, Script& sc) {
             if (!sc.loaded && !sc.path.empty()) {
-                load_script(sc, lua);
+                load_script(sc, lua, e, reg);
             }
             
             if (sc.loaded && sc.instance.valid()) {
@@ -549,10 +560,72 @@ void init(void) {
     state.lua->set_function("get_mouse_pos", &InputSystem::get_mouse_position);
     state.lua->set_function("get_mouse_button", &InputSystem::get_mouse_button);
     
+    // Bind component access to Lua
+    state.lua->set_function("get_transform", [](uint32_t entity_id) -> sol::optional<sol::table> {
+        EntityId e = {entity_id, 0}; // Simplified: assuming generation 0
+        Transform* t = state.registry.transforms.get(e);
+        if (!t) return sol::nullopt;
+        
+        sol::table result = state.lua->create_table();
+        result["x"] = t->position.X;
+        result["y"] = t->position.Y;
+        result["rotation"] = t->rotation;
+        return result;
+    });
+    
+    state.lua->set_function("set_transform", [](uint32_t entity_id, float x, float y) {
+        EntityId e = {entity_id, 0};
+        Transform* t = state.registry.transforms.get(e);
+        if (t) {
+            t->position.X = x;
+            t->position.Y = y;
+        }
+    });
+    
+    state.lua->set_function("get_velocity", [](uint32_t entity_id) -> sol::optional<sol::table> {
+        EntityId e = {entity_id, 0};
+        Rigidbody* rb = state.registry.rigidbodies.get(e);
+        if (!rb || !b2Body_IsValid(rb->body)) return sol::nullopt;
+        
+        b2Vec2 vel = b2Body_GetLinearVelocity(rb->body);
+        sol::table result = state.lua->create_table();
+        result["x"] = vel.x;
+        result["y"] = vel.y;
+        return result;
+    });
+    
+    state.lua->set_function("set_velocity", [](uint32_t entity_id, float vx, float vy) {
+        EntityId e = {entity_id, 0};
+        Rigidbody* rb = state.registry.rigidbodies.get(e);
+        if (rb && b2Body_IsValid(rb->body)) {
+            b2Body_SetLinearVelocity(rb->body, b2Vec2{vx, vy});
+        }
+    });
+    
+    state.lua->set_function("apply_impulse", [](uint32_t entity_id, float ix, float iy) {
+        EntityId e = {entity_id, 0};
+        Rigidbody* rb = state.registry.rigidbodies.get(e);
+        if (rb && b2Body_IsValid(rb->body)) {
+            b2Body_ApplyLinearImpulseToCenter(rb->body, b2Vec2{ix, iy}, true);
+        }
+    });
+    
+    state.lua->set_function("destroy_entity", [](uint32_t entity_id) {
+        EntityId e = {entity_id, 0};
+        if (state.registry.valid(e)) {
+            state.registry.destroy(e);
+            log_console("Entity " + std::to_string(entity_id) + " destroyed by script");
+        }
+    });
+    
     // Bind utility functions
     state.lua->set_function("log", [](const std::string& msg) {
         log_console("[Lua] " + msg);
     });
+    
+    // Global game state for scripts
+    state.lua->set("game_over", false);
+    state.lua->set("game_score", 0);
     
     log_console("Engine initialized");
     
@@ -1125,6 +1198,15 @@ void frame(void) {
 }
 
 void cleanup(void) {
+    state.play_mode = false;
+    std::vector<EntityId> to_delete;
+    state.registry.transforms.each([&](EntityId e, Transform& t) {
+        to_delete.push_back(e);
+    });
+    for (auto e : to_delete) {
+        state.registry.destroy(e);
+    }
+
     AssetManager::cleanup();
     sgimgui_discard(&state.sgimgui);
     simgui_shutdown();
