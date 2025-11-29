@@ -203,8 +203,6 @@ static struct {
     sol::state* lua;
     Registry registry;
     EntityId selected_entity;
-    bool dragging_entity;
-    ImVec2 drag_offset;
 } state;
 
 void init(void) {
@@ -237,8 +235,6 @@ void init(void) {
     
     // ECS: create sample entities
     state.selected_entity = NULL_ENTITY;
-    state.dragging_entity = false;
-    state.drag_offset = {0, 0};
     
     EntityId e1 = state.registry.create();
     state.registry.transforms.add(e1, Transform());
@@ -528,37 +524,7 @@ void frame(void) {
                 }
             });
             
-            if (clicked != NULL_ENTITY) {
-                state.selected_entity = clicked;
-                state.dragging_entity = true;
-                
-                // Store drag offset
-                Transform* t = state.registry.transforms.get(clicked);
-                if (t) {
-                    ImVec2 world_pos = ImVec2(viewport_center.x + t->position.X, viewport_center.y - t->position.Y);
-                    state.drag_offset = ImVec2(world_pos.x - mouse_pos.x, world_pos.y - mouse_pos.y);
-                }
-            } else {
-                state.selected_entity = NULL_ENTITY;
-            }
-        }
-        
-        // Handle entity dragging
-        if (state.dragging_entity && ImGui::IsMouseDragging(0)) {
-            if (state.selected_entity != NULL_ENTITY) {
-                Transform* t = state.registry.transforms.get(state.selected_entity);
-                if (t) {
-                    ImVec2 mouse_pos = ImGui::GetMousePos();
-                    ImVec2 new_world_pos = ImVec2(mouse_pos.x + state.drag_offset.x, mouse_pos.y + state.drag_offset.y);
-                    t->position.X = new_world_pos.x - viewport_center.x;
-                    t->position.Y = -(new_world_pos.y - viewport_center.y);
-                }
-            }
-        }
-        
-        // Release dragging
-        if (ImGui::IsMouseReleased(0)) {
-            state.dragging_entity = false;
+            state.selected_entity = (clicked != NULL_ENTITY) ? clicked : NULL_ENTITY;
         }
         
         ImGui::End();
