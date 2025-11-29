@@ -419,11 +419,22 @@ struct AssetManager {
 
 std::unordered_map<std::string, sg_image> AssetManager::textures;
 
-static bool show_test_window = true;
+static bool show_test_window = false;
 static bool show_another_window = false;
 static bool show_viewport = true;
 static bool show_hierarchy = true;
 static bool show_inspector = true;
+static bool show_console = true;
+static bool show_assets = false;
+
+// Console log buffer
+static std::vector<std::string> console_logs;
+static void log_console(const std::string& msg) {
+    console_logs.push_back(msg);
+    if (console_logs.size() > 1000) {
+        console_logs.erase(console_logs.begin());
+    }
+}
 
 struct Vertex {
     HMM_Vec4 pos;
@@ -449,13 +460,16 @@ void init(void) {
     _sg_desc.logger.func = slog_func;
     sg_setup(_sg_desc);
 
-
     simgui_desc_t _simgui_desc{};
     _simgui_desc.logger.func = slog_func;
     simgui_setup(&_simgui_desc);
 
     sgimgui_desc_t _sgimgui_desc{};
     sgimgui_init(&state.sgimgui, &_sgimgui_desc);
+    
+    // Enable docking
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
     // Box2D world
     b2WorldDef wdef = b2DefaultWorldDef();
@@ -479,8 +493,10 @@ void init(void) {
     
     // Bind utility functions
     state.lua->set_function("log", [](const std::string& msg) {
-        printf("[Lua] %s\n", msg.c_str());
+        log_console("[Lua] " + msg);
     });
+    
+    log_console("Engine initialized");
     
     // ECS: create sample entities
     state.selected_entity = NULL_ENTITY;
@@ -537,7 +553,28 @@ void frame(void) {
     }
 
     simgui_new_frame({ width, height, sapp_frame_duration(), sapp_dpi_scale() });
-    if (ImGui::BeginMainMenuBar()) {
+    
+    // Setup dockspace
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    window_flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
+    window_flags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
+    
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::Begin("DockSpace", nullptr, window_flags);
+    ImGui::PopStyleVar();
+    ImGui::PopStyleVar(2);
+    
+    // DockSpace
+    ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+    ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
+    // Menu Bar
+    if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
                 nfdchar_t* outPath = nullptr;
@@ -598,38 +635,58 @@ void frame(void) {
             ImGui::EndMenu();
         }
         
-        sgimgui_draw_menu(&state.sgimgui, "sokol-gfx");
+        
+        // Windows menu
+        if (ImGui::BeginMenu("Windows")) {
+            ImGui::MenuItem("Hierarchy", nullptr, &show_hierarchy);
+            ImGui::MenuItem("Inspector", nullptr, &show_inspector);
+            ImGui::MenuItem("Viewport", nullptr, &show_viewport);
+            ImGui::MenuItem("Console", nullptr, &show_console);
+            ImGui::MenuItem("Assets", nullptr, &show_assets);
+            ImGui::Separator();
+            ImGui::MenuItem("Demo Window", nullptr, &show_test_window);
+            ImGui::EndMenu();
+        }
+        
+        sgimgui_draw_menu(&state.sgimgui, "Graphics");
         
         // Status indicator
         ImGui::Separator();
+        float menu_bar_height = ImGui::GetFrameHeight();
+        float status_width = 100.0f;
+        ImGui::SetCursorPosX(ImGui::GetWindowWidth() - status_width);
+        
         if (state.play_mode) {
-            ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "PLAYING");
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 1.0f, 0.2f, 1.0f));
+            ImGui::Text("  PLAYING");
+            ImGui::PopStyleColor();
         } else {
-            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "EDITING");
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
+            ImGui::Text("  EDITING");
+            ImGui::PopStyleColor();
         }
         
-        ImGui::EndMainMenuBar();
+        ImGui::EndMenuBar();
     }
-
-    // 1. Show a simple window
-    static float f = 0.0f;
-    ImGui::Text("Hello, world!");
-    ImGui::SliderFloat("float", &f, 0.0f, 1.0f);
-    ImGui::ColorEdit3("clear color", &state.pass_action.colors[0].clear_value.r);
-    if (ImGui::Button("Test Window")) show_test_window ^= 1;
-    if (ImGui::Button("Another Window")) show_another_window ^= 1;
-    if (ImGui::Button("Viewport")) show_viewport ^= 1;
-    if (ImGui::Button("Hierarchy")) show_hierarchy ^= 1;
-    if (ImGui::Button("Inspector")) show_inspector ^= 1;
+    
+    ImGui::End(); // DockSpace
+    
+    // Toolbar
+    ImGui::Begin("Toolbar", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar);
+    ImGui::SetWindowPos(ImVec2(viewport->WorkPos.x, viewport->WorkPos.y + ImGui::GetFrameHeight()));
+    ImGui::SetWindowSize(ImVec2(viewport->WorkSize.x, 50));
     
     // Play/Stop button
+    ImGui::SetCursorPosY(10);
     if (!state.play_mode) {
-        if (ImGui::Button("Play (F5)")) {
+        if (ImGui::Button(" > Play ", ImVec2(80, 30))) {
             SceneSerializer::save("_temp_editor_state.txt", state.registry);
             state.play_mode = true;
+            log_console("Entering Play mode");
         }
     } else {
-        if (ImGui::Button("Stop (F5)")) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+        if (ImGui::Button(" [] Stop ", ImVec2(80, 30))) {
             state.play_mode = false;
             std::vector<EntityId> to_delete;
             state.registry.transforms.each([&](EntityId e, Transform& t) {
@@ -640,50 +697,49 @@ void frame(void) {
             }
             state.selected_entity = NULL_ENTITY;
             SceneSerializer::load("_temp_editor_state.txt", state.registry, state.world);
+            log_console("Exiting Play mode");
         }
+        ImGui::PopStyleColor();
     }
     
-    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
-    ImGui::Text("w: %d, h: %d, dpi_scale: %.1f", sapp_width(), sapp_height(), sapp_dpi_scale());
-    if (ImGui::Button(sapp_is_fullscreen() ? "Switch to windowed" : "Switch to fullscreen")) {
-        sapp_toggle_fullscreen();
-    }
+    ImGui::SameLine();
+    ImGui::Text("  |  FPS: %.1f", ImGui::GetIO().Framerate);
+    
+    ImGui::End();
 
-    // 2. Show another simple window
-    if (show_another_window) {
-        ImGui::SetNextWindowSize(ImVec2(200,100), ImGuiCond_FirstUseEver);
-        ImGui::Begin("Another Window", &show_another_window);
-        ImGui::Text("Hello");
-        ImGui::End();
-    }
-
-    // 3. ImGui demo window
-    if (show_test_window) {
-        ImGui::SetNextWindowPos(ImVec2(460, 20), ImGuiCond_FirstUseEver);
-        ImGui::ShowDemoWindow();
-    }
-
-    // 4. Hierarchy panel
-    if (show_hierarchy && !state.play_mode) { // Only show in edit mode
-        ImGui::SetNextWindowSize(ImVec2(250, 400), ImGuiCond_FirstUseEver);
+    // 1. Hierarchy panel
+    if (show_hierarchy && !state.play_mode) {
         ImGui::Begin("Hierarchy", &show_hierarchy);
         
-        if (ImGui::Button("Create Entity")) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
+        if (ImGui::Button("+ Create Entity", ImVec2(-1, 0))) {
             EntityId new_entity = state.registry.create();
             state.registry.transforms.add(new_entity, Transform());
+            log_console("Created entity " + std::to_string(new_entity.id));
         }
-        ImGui::SameLine();
-        if (ImGui::Button("Delete Selected") && state.selected_entity != NULL_ENTITY) {
-            state.registry.destroy(state.selected_entity);
-            state.selected_entity = NULL_ENTITY;
+        ImGui::PopStyleColor();
+        
+        if (state.selected_entity != NULL_ENTITY) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+            if (ImGui::Button("X Delete Selected", ImVec2(-1, 0))) {
+                state.registry.destroy(state.selected_entity);
+                log_console("Deleted entity " + std::to_string(state.selected_entity.id));
+                state.selected_entity = NULL_ENTITY;
+            }
+            ImGui::PopStyleColor();
         }
         
         ImGui::Separator();
+        ImGui::Text("Entities: %d", (int)state.registry.transforms.entities.size());
+        ImGui::Separator();
         
-        // List all entities
+        // Entity list with icons
         state.registry.transforms.each([&](EntityId e, Transform& t) {
             char label[64];
-            snprintf(label, sizeof(label), "Entity %u.%u", e.id, e.generation);
+            const char* icon = "o";
+            if (state.registry.sprites.has(e)) icon = "[]";
+            if (state.registry.rigidbodies.has(e)) icon = "()";
+            snprintf(label, sizeof(label), "%s Entity_%u", icon, e.id);
             
             ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
             if (e == state.selected_entity) {
@@ -699,13 +755,14 @@ void frame(void) {
         ImGui::End();
     }
     
-    // 5. Inspector panel
-    if (show_inspector && !state.play_mode) { // Only show in edit mode
-        ImGui::SetNextWindowSize(ImVec2(300, 500), ImGuiCond_FirstUseEver);
+    // 2. Inspector panel
+    if (show_inspector && !state.play_mode) {
         ImGui::Begin("Inspector", &show_inspector);
         
         if (state.selected_entity != NULL_ENTITY && state.registry.valid(state.selected_entity)) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
             ImGui::Text("Entity ID: %u.%u", state.selected_entity.id, state.selected_entity.generation);
+            ImGui::PopStyleColor();
             ImGui::Separator();
             
             // Transform component
@@ -816,16 +873,21 @@ void frame(void) {
             }
             
         } else {
-            ImGui::TextDisabled("No entity selected");
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
+            ImGui::Text("No entity selected");
+            ImGui::PopStyleColor();
+            ImGui::Separator();
+            ImGui::Text("Select an entity in the\nHierarchy or Viewport");
         }
         
         ImGui::End();
     }
     
-    // 6. Viewport window for 2D drawing
+    // 3. Viewport window
     if (show_viewport) {
-        ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
         ImGui::Begin("Viewport", &show_viewport);
+        ImGui::PopStyleVar();
         
         // Get viewport draw list and window bounds
         ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -914,6 +976,52 @@ void frame(void) {
         }
         
         ImGui::End();
+    }
+    
+    // 4. Console window
+    if (show_console) {
+        ImGui::Begin("Console", &show_console);
+        
+        if (ImGui::Button("Clear")) {
+            console_logs.clear();
+        }
+        ImGui::SameLine();
+        ImGui::Text("Messages: %d", (int)console_logs.size());
+        
+        ImGui::Separator();
+        ImGui::BeginChild("ScrollingRegion", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+        
+        for (const auto& log : console_logs) {
+            ImVec4 color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+            if (log.find("[Lua]") != std::string::npos) {
+                color = ImVec4(0.5f, 0.8f, 1.0f, 1.0f);
+            } else if (log.find("Error") != std::string::npos) {
+                color = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+            } else if (log.find("Created") != std::string::npos || log.find("Entering") != std::string::npos) {
+                color = ImVec4(0.3f, 1.0f, 0.3f, 1.0f);
+            }
+            ImGui::TextColored(color, "%s", log.c_str());
+        }
+        
+        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+            ImGui::SetScrollHereY(1.0f);
+        
+        ImGui::EndChild();
+        ImGui::End();
+    }
+    
+    // 5. Assets window (placeholder)
+    if (show_assets) {
+        ImGui::Begin("Assets", &show_assets);
+        ImGui::Text("Asset browser coming soon...");
+        ImGui::Separator();
+        ImGui::Text("Loaded textures: %d", (int)AssetManager::textures.size());
+        ImGui::End();
+    }
+    
+    // Demo window
+    if (show_test_window) {
+        ImGui::ShowDemoWindow(&show_test_window);
     }
 
     sg_pass _sg_pass{};
