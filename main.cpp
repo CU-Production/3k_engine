@@ -19,6 +19,7 @@
 
 static bool show_test_window = true;
 static bool show_another_window = false;
+static bool show_viewport = true;
 
 struct Vertex {
     HMM_Vec4 pos;
@@ -91,6 +92,7 @@ void frame(void) {
     ImGui::ColorEdit3("clear color", &state.pass_action.colors[0].clear_value.r);
     if (ImGui::Button("Test Window")) show_test_window ^= 1;
     if (ImGui::Button("Another Window")) show_another_window ^= 1;
+    if (ImGui::Button("Viewport")) show_viewport ^= 1;
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
     ImGui::Text("w: %d, h: %d, dpi_scale: %.1f", sapp_width(), sapp_height(), sapp_dpi_scale());
     if (ImGui::Button(sapp_is_fullscreen() ? "Switch to windowed" : "Switch to fullscreen")) {
@@ -111,15 +113,38 @@ void frame(void) {
         ImGui::ShowDemoWindow();
     }
 
-    // 2D overlay using ImGui draw list
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
-    ImVec2 center = ImVec2((float)width * 0.5f, (float)height * 0.5f);
-    ImVec2 p0 = ImVec2(center.x - 50.0f, center.y - 50.0f);
-    ImVec2 p1 = ImVec2(center.x + 50.0f, center.y + 50.0f);
-    ImU32 fill_col = IM_COL32((int)(state.pass_action.colors[0].clear_value.r*255.0f),
-                              (int)(state.pass_action.colors[0].clear_value.g*255.0f),
-                              (int)(state.pass_action.colors[0].clear_value.b*255.0f), 255);
-    dl->AddRectFilled(p0, p1, IM_COL32(255, 50, 50, 255));
+    // 4. Viewport window for 2D drawing
+    if (show_viewport) {
+        ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Viewport", &show_viewport);
+        
+        // Get viewport draw list and window bounds
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
+        ImVec2 canvas_sz = ImGui::GetContentRegionAvail();
+        if (canvas_sz.x < 50.0f) canvas_sz.x = 50.0f;
+        if (canvas_sz.y < 50.0f) canvas_sz.y = 50.0f;
+        ImVec2 canvas_p1 = ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y);
+        
+        // Draw background
+        dl->AddRectFilled(canvas_p0, canvas_p1, IM_COL32(50, 50, 50, 255));
+        dl->AddRect(canvas_p0, canvas_p1, IM_COL32(255, 255, 255, 255));
+        
+        // Draw sample rectangle in viewport
+        ImVec2 center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+        ImVec2 p0 = ImVec2(center.x - 50.0f, center.y - 50.0f);
+        ImVec2 p1 = ImVec2(center.x + 50.0f, center.y + 50.0f);
+        dl->AddRectFilled(p0, p1, IM_COL32(255, 50, 50, 255));
+        
+        // Optional: add grid
+        const float GRID_STEP = 64.0f;
+        for (float x = fmodf(canvas_p0.x, GRID_STEP); x < canvas_p1.x; x += GRID_STEP)
+            dl->AddLine(ImVec2(x, canvas_p0.y), ImVec2(x, canvas_p1.y), IM_COL32(200, 200, 200, 40));
+        for (float y = fmodf(canvas_p0.y, GRID_STEP); y < canvas_p1.y; y += GRID_STEP)
+            dl->AddLine(ImVec2(canvas_p0.x, y), ImVec2(canvas_p1.x, y), IM_COL32(200, 200, 200, 40));
+        
+        ImGui::End();
+    }
 
     sg_pass _sg_pass{};
     _sg_pass = { .action = state.pass_action, .swapchain = sglue_swapchain() };
