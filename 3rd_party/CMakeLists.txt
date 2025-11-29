@@ -32,3 +32,6 @@ add_subdirectory(box2d)
 
 # physfs (library)
 add_subdirectory(physfs)
+
+# nfd
+add_subdirectory(nativefiledialog-extended)

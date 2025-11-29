@@ -18,6 +18,11 @@
 #include "sol/sol.hpp"
 #include <unordered_map>
 #include <algorithm>
+#include <fstream>
+#include <sstream>
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 
 // ============================================================================
 // ECS Framework
@@ -56,9 +61,9 @@ struct Transform {
 struct Sprite {
     HMM_Vec4 color;
     HMM_Vec2 size;
-    // Future: texture handle
+    sg_image texture;
     
-    Sprite() : color({1,1,1,1}), size({100,100}) {}
+    Sprite() : color({1,1,1,1}), size({100,100}), texture{SG_INVALID_ID} {}
 };
 
 struct Rigidbody {
@@ -69,9 +74,10 @@ struct Rigidbody {
 
 struct Script {
     std::string path;
-    // Future: lua table ref
+    sol::table instance; // Lua table instance
+    bool loaded;
     
-    Script() : path("") {}
+    Script() : path(""), loaded(false) {}
 };
 
 struct Camera {
@@ -183,6 +189,234 @@ struct Registry {
     }
 };
 
+// ============================================================================
+// Systems
+// ============================================================================
+
+// Physics System: sync Rigidbody <-> Transform
+struct PhysicsSystem {
+    static void sync_to_physics(Registry& reg, b2WorldId world) {
+        reg.rigidbodies.each([&](EntityId e, Rigidbody& rb) {
+            if (b2Body_IsValid(rb.body)) {
+                Transform* t = reg.transforms.get(e);
+                if (t) {
+                    b2Body_SetTransform(rb.body, b2Vec2{t->position.X, t->position.Y}, b2MakeRot(t->rotation));
+                }
+            }
+        });
+    }
+    
+    static void sync_from_physics(Registry& reg, b2WorldId world) {
+        reg.rigidbodies.each([&](EntityId e, Rigidbody& rb) {
+            if (b2Body_IsValid(rb.body)) {
+                Transform* t = reg.transforms.get(e);
+                if (t) {
+                    b2Vec2 pos = b2Body_GetPosition(rb.body);
+                    b2Rot rot = b2Body_GetRotation(rb.body);
+                    t->position = {pos.x, pos.y};
+                    t->rotation = b2Rot_GetAngle(rot);
+                }
+            }
+        });
+    }
+};
+
+// Scene Serialization
+struct SceneSerializer {
+    static bool save(const char* path, Registry& reg) {
+        std::ofstream file(path);
+        if (!file.is_open()) return false;
+        
+        file << "# Scene File\n";
+        
+        reg.transforms.each([&](EntityId e, Transform& t) {
+            file << "entity " << e.id << " " << e.generation << "\n";
+            file << "  transform " << t.position.X << " " << t.position.Y << " " 
+                 << t.rotation << " " << t.scale.X << " " << t.scale.Y << "\n";
+            
+            Sprite* sprite = reg.sprites.get(e);
+            if (sprite) {
+                file << "  sprite " << sprite->color.X << " " << sprite->color.Y << " " 
+                     << sprite->color.Z << " " << sprite->color.W << " "
+                     << sprite->size.X << " " << sprite->size.Y << "\n";
+            }
+            
+            Script* script = reg.scripts.get(e);
+            if (script && !script->path.empty()) {
+                file << "  script " << script->path << "\n";
+            }
+        });
+        
+        file.close();
+        return true;
+    }
+    
+    static bool load(const char* path, Registry& reg, b2WorldId world) {
+        PHYSFS_File* pfile = PHYSFS_openRead(path);
+        if (!pfile) return false;
+        
+        PHYSFS_sint64 filesize = PHYSFS_fileLength(pfile);
+        if (filesize <= 0) { PHYSFS_close(pfile); return false; }
+        
+        std::vector<char> buffer(filesize + 1);
+        PHYSFS_readBytes(pfile, buffer.data(), filesize);
+        buffer[filesize] = '\0';
+        PHYSFS_close(pfile);
+        
+        std::istringstream iss(buffer.data());
+        std::string line;
+        EntityId current_entity = NULL_ENTITY;
+        
+        while (std::getline(iss, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            
+            std::istringstream lss(line);
+            std::string cmd;
+            lss >> cmd;
+            
+            if (cmd == "entity") {
+                current_entity = reg.create();
+            } else if (cmd == "transform" && current_entity != NULL_ENTITY) {
+                Transform t;
+                lss >> t.position.X >> t.position.Y >> t.rotation >> t.scale.X >> t.scale.Y;
+                reg.transforms.add(current_entity, t);
+            } else if (cmd == "sprite" && current_entity != NULL_ENTITY) {
+                Sprite s;
+                lss >> s.color.X >> s.color.Y >> s.color.Z >> s.color.W >> s.size.X >> s.size.Y;
+                reg.sprites.add(current_entity, s);
+            } else if (cmd == "script" && current_entity != NULL_ENTITY) {
+                Script sc;
+                lss >> sc.path;
+                reg.scripts.add(current_entity, sc);
+            }
+        }
+        
+        return true;
+    }
+};
+
+// Input System
+struct InputSystem {
+    static bool keys[SAPP_MAX_KEYCODES];
+    static bool keys_pressed[SAPP_MAX_KEYCODES];
+    static HMM_Vec2 mouse_pos;
+    static bool mouse_buttons[3];
+    
+    static void reset() {
+        for (int i = 0; i < SAPP_MAX_KEYCODES; ++i) {
+            keys_pressed[i] = false;
+        }
+    }
+    
+    static bool get_key(sapp_keycode key) { return keys[key]; }
+    static bool get_key_down(sapp_keycode key) { return keys_pressed[key]; }
+    static HMM_Vec2 get_mouse_position() { return mouse_pos; }
+    static bool get_mouse_button(int button) { return button < 3 ? mouse_buttons[button] : false; }
+};
+
+bool InputSystem::keys[SAPP_MAX_KEYCODES] = {};
+bool InputSystem::keys_pressed[SAPP_MAX_KEYCODES] = {};
+HMM_Vec2 InputSystem::mouse_pos = {0, 0};
+bool InputSystem::mouse_buttons[3] = {};
+
+// Script System
+struct ScriptSystem {
+    static void load_script(Script& script, sol::state* lua) {
+        if (script.path.empty() || script.loaded) return;
+        
+        PHYSFS_File* file = PHYSFS_openRead(script.path.c_str());
+        if (!file) return;
+        
+        PHYSFS_sint64 filesize = PHYSFS_fileLength(file);
+        if (filesize <= 0) { PHYSFS_close(file); return; }
+        
+        std::vector<char> buffer(filesize + 1);
+        PHYSFS_readBytes(file, buffer.data(), filesize);
+        buffer[filesize] = '\0';
+        PHYSFS_close(file);
+        
+        try {
+            sol::load_result loaded_script = lua->load(buffer.data());
+            if (loaded_script.valid()) {
+                sol::protected_function_result result = loaded_script();
+                if (result.valid()) {
+                    script.instance = result;
+                    script.loaded = true;
+                }
+            }
+        } catch (const std::exception& e) {
+            // Script load failed
+        }
+    }
+    
+    static void update_scripts(Registry& reg, sol::state* lua, float dt) {
+        reg.scripts.each([&](EntityId e, Script& sc) {
+            if (!sc.loaded && !sc.path.empty()) {
+                load_script(sc, lua);
+            }
+            
+            if (sc.loaded && sc.instance.valid()) {
+                sol::optional<sol::function> update_fn = sc.instance["update"];
+                if (update_fn) {
+                    try {
+                        (*update_fn)(dt);
+                    } catch (const std::exception& ex) {
+                        // Script error
+                    }
+                }
+            }
+        });
+    }
+};
+
+// Asset Manager
+struct AssetManager {
+    static std::unordered_map<std::string, sg_image> textures;
+    
+    static sg_image load_texture(const char* path) {
+        auto it = textures.find(path);
+        if (it != textures.end()) {
+            return it->second;
+        }
+        
+        PHYSFS_File* file = PHYSFS_openRead(path);
+        if (!file) return sg_image{SG_INVALID_ID};
+        
+        PHYSFS_sint64 filesize = PHYSFS_fileLength(file);
+        if (filesize <= 0) { PHYSFS_close(file); return sg_image{SG_INVALID_ID}; }
+        
+        std::vector<uint8_t> buffer(filesize);
+        PHYSFS_readBytes(file, buffer.data(), filesize);
+        PHYSFS_close(file);
+        
+        int width, height, channels;
+        stbi_uc* pixels = stbi_load_from_memory(buffer.data(), (int)filesize, &width, &height, &channels, 4);
+        if (!pixels) return sg_image{SG_INVALID_ID};
+        
+        sg_image_desc img_desc = {};
+        img_desc.width = width;
+        img_desc.height = height;
+        img_desc.pixel_format = SG_PIXELFORMAT_RGBA8;
+        img_desc.data.mip_levels[0].ptr = pixels;
+        img_desc.data.mip_levels[0].size = (size_t)(width * height * 4);
+        
+        sg_image img = sg_make_image(&img_desc);
+        stbi_image_free(pixels);
+        
+        textures[path] = img;
+        return img;
+    }
+    
+    static void cleanup() {
+        for (auto& pair : textures) {
+            sg_destroy_image(pair.second);
+        }
+        textures.clear();
+    }
+};
+
+std::unordered_map<std::string, sg_image> AssetManager::textures;
+
 static bool show_test_window = true;
 static bool show_another_window = false;
 static bool show_viewport = true;
@@ -233,6 +467,17 @@ void init(void) {
     state.lua = new sol::state();
     state.lua->open_libraries(sol::lib::base, sol::lib::math);
     
+    // Bind input to Lua
+    state.lua->set_function("get_key", &InputSystem::get_key);
+    state.lua->set_function("get_key_down", &InputSystem::get_key_down);
+    state.lua->set_function("get_mouse_pos", &InputSystem::get_mouse_position);
+    state.lua->set_function("get_mouse_button", &InputSystem::get_mouse_button);
+    
+    // Bind utility functions
+    state.lua->set_function("log", [](const std::string& msg) {
+        printf("[Lua] %s\n", msg.c_str());
+    });
+    
     // ECS: create sample entities
     state.selected_entity = NULL_ENTITY;
     
@@ -256,18 +501,50 @@ void init(void) {
 void frame(void) {
     const int width = sapp_width();
     const int height = sapp_height();
+    const float dt = (float)sapp_frame_duration();
+    
+    // Reset per-frame input
+    InputSystem::reset();
 
     // Physics fixed-step
-    const float dt = (float)sapp_frame_duration();
     const float step = 1.0f / 60.0f;
     state.accumulator += dt;
     while (state.accumulator >= step) {
+        // Update scripts
+        ScriptSystem::update_scripts(state.registry, state.lua, step);
+        
+        // Sync editor changes to physics
+        PhysicsSystem::sync_to_physics(state.registry, state.world);
+        
         b2World_Step(state.world, step, 4);
+        
+        // Sync physics back to transforms
+        PhysicsSystem::sync_from_physics(state.registry, state.world);
+        
         state.accumulator -= step;
     }
 
     simgui_new_frame({ width, height, sapp_frame_duration(), sapp_dpi_scale() });
     if (ImGui::BeginMainMenuBar()) {
+        if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
+                SceneSerializer::save("scene.txt", state.registry);
+            }
+            if (ImGui::MenuItem("Load Scene", "Ctrl+L")) {
+                // Clear current scene
+                std::vector<EntityId> to_delete;
+                state.registry.transforms.each([&](EntityId e, Transform& t) {
+                    to_delete.push_back(e);
+                });
+                for (auto e : to_delete) {
+                    state.registry.destroy(e);
+                }
+                state.selected_entity = NULL_ENTITY;
+                
+                SceneSerializer::load("scene.txt", state.registry, state.world);
+            }
+            ImGui::EndMenu();
+        }
         sgimgui_draw_menu(&state.sgimgui, "sokol-gfx");
         ImGui::EndMainMenuBar();
     }
@@ -363,6 +640,20 @@ void frame(void) {
                 if (ImGui::CollapsingHeader("Sprite", ImGuiTreeNodeFlags_DefaultOpen)) {
                     ImGui::ColorEdit4("Color", &sprite->color.X);
                     ImGui::DragFloat2("Size", &sprite->size.X, 1.0f, 1.0f, 500.0f);
+                    
+                    // Texture loading
+                    static char tex_path[256] = "";
+                    ImGui::InputText("Texture Path", tex_path, sizeof(tex_path));
+                    ImGui::SameLine();
+                    if (ImGui::Button("Load")) {
+                        sg_image img = AssetManager::load_texture(tex_path);
+                        if (img.id != SG_INVALID_ID) {
+                            sprite->texture = img;
+                        }
+                    }
+                    
+                    bool has_tex = sprite->texture.id != SG_INVALID_ID;
+                    ImGui::Text("Texture: %s", has_tex ? "Loaded" : "None");
                 }
             } else {
                 if (ImGui::Button("Add Sprite Component")) {
@@ -542,6 +833,7 @@ void frame(void) {
 }
 
 void cleanup(void) {
+    AssetManager::cleanup();
     sgimgui_discard(&state.sgimgui);
     simgui_shutdown();
     b2DestroyWorld(state.world);
@@ -550,8 +842,26 @@ void cleanup(void) {
     sg_shutdown();
 }
 
-void input(const sapp_event* ev) {
-    simgui_handle_event(ev);
+void event(const sapp_event* e) {
+    simgui_handle_event(e);
+    
+    // Update input system
+    if (e->type == SAPP_EVENTTYPE_KEY_DOWN) {
+        InputSystem::keys[e->key_code] = true;
+        InputSystem::keys_pressed[e->key_code] = true;
+    } else if (e->type == SAPP_EVENTTYPE_KEY_UP) {
+        InputSystem::keys[e->key_code] = false;
+    } else if (e->type == SAPP_EVENTTYPE_MOUSE_MOVE) {
+        InputSystem::mouse_pos = {e->mouse_x, e->mouse_y};
+    } else if (e->type == SAPP_EVENTTYPE_MOUSE_DOWN) {
+        if (e->mouse_button < 3) {
+            InputSystem::mouse_buttons[e->mouse_button] = true;
+        }
+    } else if (e->type == SAPP_EVENTTYPE_MOUSE_UP) {
+        if (e->mouse_button < 3) {
+            InputSystem::mouse_buttons[e->mouse_button] = false;
+        }
+    }
 }
 
 sapp_desc sokol_main(int argc, char* argv[]) {
@@ -559,7 +869,7 @@ sapp_desc sokol_main(int argc, char* argv[]) {
     _sapp_desc.init_cb = init;
     _sapp_desc.frame_cb = frame;
     _sapp_desc.cleanup_cb = cleanup;
-    _sapp_desc.event_cb = input;
+    _sapp_desc.event_cb = event;
     _sapp_desc.width = 1280;
     _sapp_desc.height = 720;
     _sapp_desc.window_title = "sokol-app";
