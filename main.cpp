@@ -16,6 +16,172 @@
 #include "box2d/box2d.h"
 #include "physfs.h"
 #include "sol/sol.hpp"
+#include <unordered_map>
+#include <algorithm>
+
+// ============================================================================
+// ECS Framework
+// ============================================================================
+
+struct EntityId {
+    uint32_t id;
+    uint32_t generation;
+    
+    bool operator==(const EntityId& other) const {
+        return id == other.id && generation == other.generation;
+    }
+    bool operator!=(const EntityId& other) const { return !(*this == other); }
+};
+
+namespace std {
+    template<> struct hash<EntityId> {
+        size_t operator()(const EntityId& e) const {
+            return ((size_t)e.id << 32) | e.generation;
+        }
+    };
+}
+
+static const EntityId NULL_ENTITY = {UINT32_MAX, 0};
+
+// Components
+struct Transform {
+    HMM_Vec2 position;
+    float rotation;
+    HMM_Vec2 scale;
+    EntityId parent;
+    
+    Transform() : position({0,0}), rotation(0), scale({1,1}), parent(NULL_ENTITY) {}
+};
+
+struct Sprite {
+    HMM_Vec4 color;
+    HMM_Vec2 size;
+    // Future: texture handle
+    
+    Sprite() : color({1,1,1,1}), size({100,100}) {}
+};
+
+struct Rigidbody {
+    b2BodyId body;
+    
+    Rigidbody() : body(b2_nullBodyId) {}
+};
+
+struct Script {
+    std::string path;
+    // Future: lua table ref
+    
+    Script() : path("") {}
+};
+
+struct Camera {
+    float zoom;
+    HMM_Vec2 offset;
+    
+    Camera() : zoom(1.0f), offset({0,0}) {}
+};
+
+// Sparse set component storage
+template<typename T>
+struct ComponentArray {
+    std::vector<EntityId> entities;
+    std::vector<T> components;
+    std::unordered_map<EntityId, size_t> entity_to_index;
+    
+    bool has(EntityId e) const {
+        return entity_to_index.find(e) != entity_to_index.end();
+    }
+    
+    T* get(EntityId e) {
+        auto it = entity_to_index.find(e);
+        if (it == entity_to_index.end()) return nullptr;
+        return &components[it->second];
+    }
+    
+    T& add(EntityId e, const T& component) {
+        if (has(e)) {
+            return *get(e);
+        }
+        size_t index = entities.size();
+        entities.push_back(e);
+        components.push_back(component);
+        entity_to_index[e] = index;
+        return components.back();
+    }
+    
+    void remove(EntityId e) {
+        auto it = entity_to_index.find(e);
+        if (it == entity_to_index.end()) return;
+        
+        size_t index = it->second;
+        size_t last = entities.size() - 1;
+        
+        if (index != last) {
+            entities[index] = entities[last];
+            components[index] = components[last];
+            entity_to_index[entities[index]] = index;
+        }
+        
+        entities.pop_back();
+        components.pop_back();
+        entity_to_index.erase(e);
+    }
+    
+    template<typename Fn>
+    void each(Fn&& fn) {
+        for (size_t i = 0; i < entities.size(); ++i) {
+            fn(entities[i], components[i]);
+        }
+    }
+};
+
+// Registry
+struct Registry {
+    std::vector<uint32_t> free_ids;
+    std::vector<uint32_t> generations;
+    uint32_t next_id = 0;
+    
+    ComponentArray<Transform> transforms;
+    ComponentArray<Sprite> sprites;
+    ComponentArray<Rigidbody> rigidbodies;
+    ComponentArray<Script> scripts;
+    ComponentArray<Camera> cameras;
+    
+    EntityId create() {
+        EntityId e;
+        if (!free_ids.empty()) {
+            e.id = free_ids.back();
+            free_ids.pop_back();
+            e.generation = generations[e.id];
+        } else {
+            e.id = next_id++;
+            e.generation = 0;
+            generations.push_back(0);
+        }
+        return e;
+    }
+    
+    void destroy(EntityId e) {
+        if (e.id >= generations.size() || generations[e.id] != e.generation) {
+            return; // Invalid entity
+        }
+        
+        // Remove all components
+        transforms.remove(e);
+        sprites.remove(e);
+        rigidbodies.remove(e);
+        scripts.remove(e);
+        cameras.remove(e);
+        
+        // Increment generation and add to free list
+        generations[e.id]++;
+        free_ids.push_back(e.id);
+    }
+    
+    bool valid(EntityId e) const {
+        return e.id < generations.size() && generations[e.id] == e.generation;
+    }
+};
 
 static bool show_test_window = true;
 static bool show_another_window = false;
@@ -33,6 +199,8 @@ static struct {
     b2WorldId world;
     float accumulator;
     sol::state* lua;
+    Registry registry;
+    EntityId selected_entity;
 } state;
 
 void init(void) {
@@ -62,6 +230,23 @@ void init(void) {
     // Lua (sol2)
     state.lua = new sol::state();
     state.lua->open_libraries(sol::lib::base, sol::lib::math);
+    
+    // ECS: create sample entities
+    state.selected_entity = NULL_ENTITY;
+    
+    EntityId e1 = state.registry.create();
+    state.registry.transforms.add(e1, Transform());
+    state.registry.transforms.get(e1)->position = {0, 0};
+    state.registry.sprites.add(e1, Sprite());
+    state.registry.sprites.get(e1)->color = {1.0f, 0.2f, 0.2f, 1.0f};
+    state.registry.sprites.get(e1)->size = {100, 100};
+    
+    EntityId e2 = state.registry.create();
+    state.registry.transforms.add(e2, Transform());
+    state.registry.transforms.get(e2)->position = {150, 150};
+    state.registry.sprites.add(e2, Sprite());
+    state.registry.sprites.get(e2)->color = {0.2f, 1.0f, 0.2f, 1.0f};
+    state.registry.sprites.get(e2)->size = {80, 80};
 
     state.pass_action.colors[0] = { .load_action=SG_LOADACTION_CLEAR, .clear_value={0.0f, 0.0f, 0.0f, 1.0f } };
 }
@@ -130,18 +315,32 @@ void frame(void) {
         dl->AddRectFilled(canvas_p0, canvas_p1, IM_COL32(50, 50, 50, 255));
         dl->AddRect(canvas_p0, canvas_p1, IM_COL32(255, 255, 255, 255));
         
-        // Draw sample rectangle in viewport
-        ImVec2 center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
-        ImVec2 p0 = ImVec2(center.x - 50.0f, center.y - 50.0f);
-        ImVec2 p1 = ImVec2(center.x + 50.0f, center.y + 50.0f);
-        dl->AddRectFilled(p0, p1, IM_COL32(255, 50, 50, 255));
-        
         // Optional: add grid
         const float GRID_STEP = 64.0f;
         for (float x = fmodf(canvas_p0.x, GRID_STEP); x < canvas_p1.x; x += GRID_STEP)
             dl->AddLine(ImVec2(x, canvas_p0.y), ImVec2(x, canvas_p1.y), IM_COL32(200, 200, 200, 40));
         for (float y = fmodf(canvas_p0.y, GRID_STEP); y < canvas_p1.y; y += GRID_STEP)
             dl->AddLine(ImVec2(canvas_p0.x, y), ImVec2(canvas_p1.x, y), IM_COL32(200, 200, 200, 40));
+        
+        // Render all entities with Transform + Sprite
+        ImVec2 viewport_center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+        state.registry.transforms.each([&](EntityId e, Transform& t) {
+            Sprite* sprite = state.registry.sprites.get(e);
+            if (sprite) {
+                ImVec2 world_pos = ImVec2(viewport_center.x + t.position.X, viewport_center.y - t.position.Y);
+                ImVec2 half_size = ImVec2(sprite->size.X * 0.5f, sprite->size.Y * 0.5f);
+                ImVec2 p0 = ImVec2(world_pos.x - half_size.x, world_pos.y - half_size.y);
+                ImVec2 p1 = ImVec2(world_pos.x + half_size.x, world_pos.y + half_size.y);
+                ImU32 col = IM_COL32((int)(sprite->color.X*255), (int)(sprite->color.Y*255), 
+                                     (int)(sprite->color.Z*255), (int)(sprite->color.W*255));
+                dl->AddRectFilled(p0, p1, col);
+                
+                // Highlight selected
+                if (e == state.selected_entity) {
+                    dl->AddRect(p0, p1, IM_COL32(255, 255, 0, 255), 0.0f, 0, 2.0f);
+                }
+            }
+        });
         
         ImGui::End();
     }
