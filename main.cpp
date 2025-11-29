@@ -24,6 +24,8 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+#include "nfd.h"
+
 // ============================================================================
 // ECS Framework
 // ============================================================================
@@ -437,6 +439,8 @@ static struct {
     sol::state* lua;
     Registry registry;
     EntityId selected_entity;
+    bool play_mode; // Editor vs Play mode
+    std::string current_scene_path;
 } state;
 
 void init(void) {
@@ -480,6 +484,8 @@ void init(void) {
     
     // ECS: create sample entities
     state.selected_entity = NULL_ENTITY;
+    state.play_mode = false;
+    state.current_scene_path = "scene.txt";
     
     EntityId e1 = state.registry.create();
     state.registry.transforms.add(e1, Transform());
@@ -494,6 +500,9 @@ void init(void) {
     state.registry.sprites.add(e2, Sprite());
     state.registry.sprites.get(e2)->color = {0.2f, 1.0f, 0.2f, 1.0f};
     state.registry.sprites.get(e2)->size = {80, 80};
+
+    // Initialize NFD
+    NFD_Init();
 
     state.pass_action.colors[0] = { .load_action=SG_LOADACTION_CLEAR, .clear_value={0.0f, 0.0f, 0.0f, 1.0f } };
 }
@@ -510,16 +519,19 @@ void frame(void) {
     const float step = 1.0f / 60.0f;
     state.accumulator += dt;
     while (state.accumulator >= step) {
-        // Update scripts
-        ScriptSystem::update_scripts(state.registry, state.lua, step);
-        
-        // Sync editor changes to physics
-        PhysicsSystem::sync_to_physics(state.registry, state.world);
-        
-        b2World_Step(state.world, step, 4);
-        
-        // Sync physics back to transforms
-        PhysicsSystem::sync_from_physics(state.registry, state.world);
+        // Only update scripts and physics in play mode
+        if (state.play_mode) {
+            // Update scripts
+            ScriptSystem::update_scripts(state.registry, state.lua, step);
+            
+            // Sync editor changes to physics
+            PhysicsSystem::sync_to_physics(state.registry, state.world);
+            
+            b2World_Step(state.world, step, 4);
+            
+            // Sync physics back to transforms
+            PhysicsSystem::sync_from_physics(state.registry, state.world);
+        }
         
         state.accumulator -= step;
     }
@@ -528,24 +540,74 @@ void frame(void) {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
             if (ImGui::MenuItem("Save Scene", "Ctrl+S")) {
-                SceneSerializer::save("scene.txt", state.registry);
+                nfdchar_t* outPath = nullptr;
+                nfdfilteritem_t filters[1] = { { "Scene", "txt" } };
+                nfdresult_t result = NFD_SaveDialog(&outPath, filters, 1, nullptr, "scene.txt");
+                if (result == NFD_OKAY) {
+                    SceneSerializer::save(outPath, state.registry);
+                    state.current_scene_path = outPath;
+                    NFD_FreePath(outPath);
+                }
             }
             if (ImGui::MenuItem("Load Scene", "Ctrl+L")) {
-                // Clear current scene
-                std::vector<EntityId> to_delete;
-                state.registry.transforms.each([&](EntityId e, Transform& t) {
-                    to_delete.push_back(e);
-                });
-                for (auto e : to_delete) {
-                    state.registry.destroy(e);
+                nfdchar_t* outPath = nullptr;
+                nfdfilteritem_t filters[1] = { { "Scene", "txt" } };
+                nfdresult_t result = NFD_OpenDialog(&outPath, filters, 1, nullptr);
+                if (result == NFD_OKAY) {
+                    // Clear current scene
+                    std::vector<EntityId> to_delete;
+                    state.registry.transforms.each([&](EntityId e, Transform& t) {
+                        to_delete.push_back(e);
+                    });
+                    for (auto e : to_delete) {
+                        state.registry.destroy(e);
+                    }
+                    state.selected_entity = NULL_ENTITY;
+                    
+                    SceneSerializer::load(outPath, state.registry, state.world);
+                    state.current_scene_path = outPath;
+                    NFD_FreePath(outPath);
                 }
-                state.selected_entity = NULL_ENTITY;
-                
-                SceneSerializer::load("scene.txt", state.registry, state.world);
             }
             ImGui::EndMenu();
         }
+        
+        // Play/Stop mode toggle
+        if (ImGui::BeginMenu("Scene")) {
+            if (state.play_mode) {
+                if (ImGui::MenuItem("Stop", "F5")) {
+                    state.play_mode = false;
+                    // Reload scene to reset state
+                    std::vector<EntityId> to_delete;
+                    state.registry.transforms.each([&](EntityId e, Transform& t) {
+                        to_delete.push_back(e);
+                    });
+                    for (auto e : to_delete) {
+                        state.registry.destroy(e);
+                    }
+                    state.selected_entity = NULL_ENTITY;
+                    SceneSerializer::load(state.current_scene_path.c_str(), state.registry, state.world);
+                }
+            } else {
+                if (ImGui::MenuItem("Play", "F5")) {
+                    // Save current state before playing
+                    SceneSerializer::save("_temp_editor_state.txt", state.registry);
+                    state.play_mode = true;
+                }
+            }
+            ImGui::EndMenu();
+        }
+        
         sgimgui_draw_menu(&state.sgimgui, "sokol-gfx");
+        
+        // Status indicator
+        ImGui::Separator();
+        if (state.play_mode) {
+            ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "PLAYING");
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "EDITING");
+        }
+        
         ImGui::EndMainMenuBar();
     }
 
@@ -559,6 +621,28 @@ void frame(void) {
     if (ImGui::Button("Viewport")) show_viewport ^= 1;
     if (ImGui::Button("Hierarchy")) show_hierarchy ^= 1;
     if (ImGui::Button("Inspector")) show_inspector ^= 1;
+    
+    // Play/Stop button
+    if (!state.play_mode) {
+        if (ImGui::Button("Play (F5)")) {
+            SceneSerializer::save("_temp_editor_state.txt", state.registry);
+            state.play_mode = true;
+        }
+    } else {
+        if (ImGui::Button("Stop (F5)")) {
+            state.play_mode = false;
+            std::vector<EntityId> to_delete;
+            state.registry.transforms.each([&](EntityId e, Transform& t) {
+                to_delete.push_back(e);
+            });
+            for (auto e : to_delete) {
+                state.registry.destroy(e);
+            }
+            state.selected_entity = NULL_ENTITY;
+            SceneSerializer::load("_temp_editor_state.txt", state.registry, state.world);
+        }
+    }
+    
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
     ImGui::Text("w: %d, h: %d, dpi_scale: %.1f", sapp_width(), sapp_height(), sapp_dpi_scale());
     if (ImGui::Button(sapp_is_fullscreen() ? "Switch to windowed" : "Switch to fullscreen")) {
@@ -580,7 +664,7 @@ void frame(void) {
     }
 
     // 4. Hierarchy panel
-    if (show_hierarchy) {
+    if (show_hierarchy && !state.play_mode) { // Only show in edit mode
         ImGui::SetNextWindowSize(ImVec2(250, 400), ImGuiCond_FirstUseEver);
         ImGui::Begin("Hierarchy", &show_hierarchy);
         
@@ -616,7 +700,7 @@ void frame(void) {
     }
     
     // 5. Inspector panel
-    if (show_inspector) {
+    if (show_inspector && !state.play_mode) { // Only show in edit mode
         ImGui::SetNextWindowSize(ImVec2(300, 500), ImGuiCond_FirstUseEver);
         ImGui::Begin("Inspector", &show_inspector);
         
@@ -697,8 +781,19 @@ void frame(void) {
                     char buf[256];
                     strncpy(buf, script->path.c_str(), sizeof(buf));
                     buf[sizeof(buf)-1] = '\0';
-                    if (ImGui::InputText("Script Path", buf, sizeof(buf))) {
+                    if (ImGui::InputText("Script Path", buf, sizeof(buf), ImGuiInputTextFlags_CtrlEnterForNewLine)) {
                         script->path = buf;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Browse##Script")) {
+                        nfdchar_t* outPath = nullptr;
+                        nfdfilteritem_t filters[1] = { { "Lua Script", "lua" } };
+                        nfdresult_t result = NFD_OpenDialog(&outPath, filters, 1, nullptr);
+                        if (result == NFD_OKAY) {
+                            script->path = outPath;
+                            script->loaded = false; // Force reload
+                            NFD_FreePath(outPath);
+                        }
                     }
                 }
             } else {
@@ -839,11 +934,31 @@ void cleanup(void) {
     b2DestroyWorld(state.world);
     if (state.lua) { delete state.lua; state.lua = nullptr; }
     PHYSFS_deinit();
+    NFD_Quit();
     sg_shutdown();
 }
 
 void event(const sapp_event* e) {
     simgui_handle_event(e);
+    
+    // F5 to toggle play mode
+    if (e->type == SAPP_EVENTTYPE_KEY_DOWN && e->key_code == SAPP_KEYCODE_F5) {
+        if (!state.play_mode) {
+            SceneSerializer::save("_temp_editor_state.txt", state.registry);
+            state.play_mode = true;
+        } else {
+            state.play_mode = false;
+            std::vector<EntityId> to_delete;
+            state.registry.transforms.each([&](EntityId e, Transform& t) {
+                to_delete.push_back(e);
+            });
+            for (auto e : to_delete) {
+                state.registry.destroy(e);
+            }
+            state.selected_entity = NULL_ENTITY;
+            SceneSerializer::load("_temp_editor_state.txt", state.registry, state.world);
+        }
+    }
     
     // Update input system
     if (e->type == SAPP_EVENTTYPE_KEY_DOWN) {
