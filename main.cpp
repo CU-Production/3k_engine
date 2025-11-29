@@ -203,6 +203,8 @@ static struct {
     sol::state* lua;
     Registry registry;
     EntityId selected_entity;
+    bool dragging_entity;
+    ImVec2 drag_offset;
 } state;
 
 void init(void) {
@@ -235,6 +237,8 @@ void init(void) {
     
     // ECS: create sample entities
     state.selected_entity = NULL_ENTITY;
+    state.dragging_entity = false;
+    state.drag_offset = {0, 0};
     
     EntityId e1 = state.registry.create();
     state.registry.transforms.add(e1, Transform());
@@ -466,16 +470,41 @@ void frame(void) {
             Sprite* sprite = state.registry.sprites.get(e);
             if (sprite) {
                 ImVec2 world_pos = ImVec2(viewport_center.x + t.position.X, viewport_center.y - t.position.Y);
-                ImVec2 half_size = ImVec2(sprite->size.X * 0.5f, sprite->size.Y * 0.5f);
-                ImVec2 p0 = ImVec2(world_pos.x - half_size.x, world_pos.y - half_size.y);
-                ImVec2 p1 = ImVec2(world_pos.x + half_size.x, world_pos.y + half_size.y);
+                
+                // Apply rotation and scale
+                float cos_r = cosf(t.rotation);
+                float sin_r = sinf(t.rotation);
+                ImVec2 scaled_size = ImVec2(sprite->size.X * t.scale.X, sprite->size.Y * t.scale.Y);
+                
+                // Calculate rotated quad corners
+                ImVec2 corners[4];
+                float hw = scaled_size.x * 0.5f;
+                float hh = scaled_size.y * 0.5f;
+                
+                // Local corners before rotation
+                ImVec2 local[4] = {
+                    {-hw, -hh}, // top-left
+                    { hw, -hh}, // top-right
+                    { hw,  hh}, // bottom-right
+                    {-hw,  hh}  // bottom-left
+                };
+                
+                // Rotate and translate to world position
+                for (int i = 0; i < 4; ++i) {
+                    float rx = local[i].x * cos_r - local[i].y * sin_r;
+                    float ry = local[i].x * sin_r + local[i].y * cos_r;
+                    corners[i] = ImVec2(world_pos.x + rx, world_pos.y + ry);
+                }
+                
                 ImU32 col = IM_COL32((int)(sprite->color.X*255), (int)(sprite->color.Y*255), 
                                      (int)(sprite->color.Z*255), (int)(sprite->color.W*255));
-                dl->AddRectFilled(p0, p1, col);
+                
+                // Draw filled quad
+                dl->AddQuadFilled(corners[0], corners[1], corners[2], corners[3], col);
                 
                 // Highlight selected
                 if (e == state.selected_entity) {
-                    dl->AddRect(p0, p1, IM_COL32(255, 255, 0, 255), 0.0f, 0, 2.0f);
+                    dl->AddQuad(corners[0], corners[1], corners[2], corners[3], IM_COL32(255, 255, 0, 255), 2.0f);
                 }
             }
         });
@@ -489,7 +518,9 @@ void frame(void) {
                 Sprite* sprite = state.registry.sprites.get(e);
                 if (sprite) {
                     ImVec2 world_pos = ImVec2(viewport_center.x + t.position.X, viewport_center.y - t.position.Y);
-                    ImVec2 half_size = ImVec2(sprite->size.X * 0.5f, sprite->size.Y * 0.5f);
+                    ImVec2 half_size = ImVec2(sprite->size.X * t.scale.X * 0.5f, sprite->size.Y * t.scale.Y * 0.5f);
+                    
+                    // Simple AABB test (doesn't account for rotation, but good enough for selection)
                     if (mouse_pos.x >= world_pos.x - half_size.x && mouse_pos.x <= world_pos.x + half_size.x &&
                         mouse_pos.y >= world_pos.y - half_size.y && mouse_pos.y <= world_pos.y + half_size.y) {
                         clicked = e;
@@ -497,7 +528,37 @@ void frame(void) {
                 }
             });
             
-            state.selected_entity = clicked;
+            if (clicked != NULL_ENTITY) {
+                state.selected_entity = clicked;
+                state.dragging_entity = true;
+                
+                // Store drag offset
+                Transform* t = state.registry.transforms.get(clicked);
+                if (t) {
+                    ImVec2 world_pos = ImVec2(viewport_center.x + t->position.X, viewport_center.y - t->position.Y);
+                    state.drag_offset = ImVec2(world_pos.x - mouse_pos.x, world_pos.y - mouse_pos.y);
+                }
+            } else {
+                state.selected_entity = NULL_ENTITY;
+            }
+        }
+        
+        // Handle entity dragging
+        if (state.dragging_entity && ImGui::IsMouseDragging(0)) {
+            if (state.selected_entity != NULL_ENTITY) {
+                Transform* t = state.registry.transforms.get(state.selected_entity);
+                if (t) {
+                    ImVec2 mouse_pos = ImGui::GetMousePos();
+                    ImVec2 new_world_pos = ImVec2(mouse_pos.x + state.drag_offset.x, mouse_pos.y + state.drag_offset.y);
+                    t->position.X = new_world_pos.x - viewport_center.x;
+                    t->position.Y = -(new_world_pos.y - viewport_center.y);
+                }
+            }
+        }
+        
+        // Release dragging
+        if (ImGui::IsMouseReleased(0)) {
+            state.dragging_entity = false;
         }
         
         ImGui::End();
