@@ -186,6 +186,8 @@ struct Registry {
 static bool show_test_window = true;
 static bool show_another_window = false;
 static bool show_viewport = true;
+static bool show_hierarchy = true;
+static bool show_inspector = true;
 
 struct Vertex {
     HMM_Vec4 pos;
@@ -278,6 +280,8 @@ void frame(void) {
     if (ImGui::Button("Test Window")) show_test_window ^= 1;
     if (ImGui::Button("Another Window")) show_another_window ^= 1;
     if (ImGui::Button("Viewport")) show_viewport ^= 1;
+    if (ImGui::Button("Hierarchy")) show_hierarchy ^= 1;
+    if (ImGui::Button("Inspector")) show_inspector ^= 1;
     ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
     ImGui::Text("w: %d, h: %d, dpi_scale: %.1f", sapp_width(), sapp_height(), sapp_dpi_scale());
     if (ImGui::Button(sapp_is_fullscreen() ? "Switch to windowed" : "Switch to fullscreen")) {
@@ -298,7 +302,141 @@ void frame(void) {
         ImGui::ShowDemoWindow();
     }
 
-    // 4. Viewport window for 2D drawing
+    // 4. Hierarchy panel
+    if (show_hierarchy) {
+        ImGui::SetNextWindowSize(ImVec2(250, 400), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Hierarchy", &show_hierarchy);
+        
+        if (ImGui::Button("Create Entity")) {
+            EntityId new_entity = state.registry.create();
+            state.registry.transforms.add(new_entity, Transform());
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Delete Selected") && state.selected_entity != NULL_ENTITY) {
+            state.registry.destroy(state.selected_entity);
+            state.selected_entity = NULL_ENTITY;
+        }
+        
+        ImGui::Separator();
+        
+        // List all entities
+        state.registry.transforms.each([&](EntityId e, Transform& t) {
+            char label[64];
+            snprintf(label, sizeof(label), "Entity %u.%u", e.id, e.generation);
+            
+            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+            if (e == state.selected_entity) {
+                flags |= ImGuiTreeNodeFlags_Selected;
+            }
+            
+            ImGui::TreeNodeEx(label, flags);
+            if (ImGui::IsItemClicked()) {
+                state.selected_entity = e;
+            }
+        });
+        
+        ImGui::End();
+    }
+    
+    // 5. Inspector panel
+    if (show_inspector) {
+        ImGui::SetNextWindowSize(ImVec2(300, 500), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Inspector", &show_inspector);
+        
+        if (state.selected_entity != NULL_ENTITY && state.registry.valid(state.selected_entity)) {
+            ImGui::Text("Entity ID: %u.%u", state.selected_entity.id, state.selected_entity.generation);
+            ImGui::Separator();
+            
+            // Transform component
+            Transform* transform = state.registry.transforms.get(state.selected_entity);
+            if (transform) {
+                if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::DragFloat2("Position", &transform->position.X, 1.0f);
+                    ImGui::DragFloat("Rotation", &transform->rotation, 0.01f);
+                    ImGui::DragFloat2("Scale", &transform->scale.X, 0.01f);
+                }
+            }
+            
+            // Sprite component
+            Sprite* sprite = state.registry.sprites.get(state.selected_entity);
+            if (sprite) {
+                if (ImGui::CollapsingHeader("Sprite", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::ColorEdit4("Color", &sprite->color.X);
+                    ImGui::DragFloat2("Size", &sprite->size.X, 1.0f, 1.0f, 500.0f);
+                }
+            } else {
+                if (ImGui::Button("Add Sprite Component")) {
+                    state.registry.sprites.add(state.selected_entity, Sprite());
+                }
+            }
+            
+            // Rigidbody component
+            Rigidbody* rb = state.registry.rigidbodies.get(state.selected_entity);
+            if (rb) {
+                if (ImGui::CollapsingHeader("Rigidbody", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    bool has_body = b2Body_IsValid(rb->body);
+                    ImGui::Text("Box2D Body: %s", has_body ? "Valid" : "None");
+                    if (!has_body && ImGui::Button("Create Box2D Body")) {
+                        b2BodyDef bodyDef = b2DefaultBodyDef();
+                        Transform* t = state.registry.transforms.get(state.selected_entity);
+                        if (t) {
+                            bodyDef.position = b2Vec2{t->position.X, t->position.Y};
+                            bodyDef.rotation = b2MakeRot(t->rotation);
+                        }
+                        bodyDef.type = b2_dynamicBody;
+                        rb->body = b2CreateBody(state.world, &bodyDef);
+                        
+                        // Add a box shape
+                        b2Polygon box = b2MakeBox(50.0f, 50.0f);
+                        b2ShapeDef shapeDef = b2DefaultShapeDef();
+                        shapeDef.density = 1.0f;
+                        b2CreatePolygonShape(rb->body, &shapeDef, &box);
+                    }
+                }
+            } else {
+                if (ImGui::Button("Add Rigidbody Component")) {
+                    state.registry.rigidbodies.add(state.selected_entity, Rigidbody());
+                }
+            }
+            
+            // Script component
+            Script* script = state.registry.scripts.get(state.selected_entity);
+            if (script) {
+                if (ImGui::CollapsingHeader("Script", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    char buf[256];
+                    strncpy(buf, script->path.c_str(), sizeof(buf));
+                    buf[sizeof(buf)-1] = '\0';
+                    if (ImGui::InputText("Script Path", buf, sizeof(buf))) {
+                        script->path = buf;
+                    }
+                }
+            } else {
+                if (ImGui::Button("Add Script Component")) {
+                    state.registry.scripts.add(state.selected_entity, Script());
+                }
+            }
+            
+            // Camera component
+            Camera* camera = state.registry.cameras.get(state.selected_entity);
+            if (camera) {
+                if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    ImGui::DragFloat("Zoom", &camera->zoom, 0.01f, 0.1f, 10.0f);
+                    ImGui::DragFloat2("Offset", &camera->offset.X, 1.0f);
+                }
+            } else {
+                if (ImGui::Button("Add Camera Component")) {
+                    state.registry.cameras.add(state.selected_entity, Camera());
+                }
+            }
+            
+        } else {
+            ImGui::TextDisabled("No entity selected");
+        }
+        
+        ImGui::End();
+    }
+    
+    // 6. Viewport window for 2D drawing
     if (show_viewport) {
         ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
         ImGui::Begin("Viewport", &show_viewport);
@@ -341,6 +479,26 @@ void frame(void) {
                 }
             }
         });
+        
+        // Handle viewport click to select entity
+        if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(0)) {
+            ImVec2 mouse_pos = ImGui::GetMousePos();
+            EntityId clicked = NULL_ENTITY;
+            
+            state.registry.transforms.each([&](EntityId e, Transform& t) {
+                Sprite* sprite = state.registry.sprites.get(e);
+                if (sprite) {
+                    ImVec2 world_pos = ImVec2(viewport_center.x + t.position.X, viewport_center.y - t.position.Y);
+                    ImVec2 half_size = ImVec2(sprite->size.X * 0.5f, sprite->size.Y * 0.5f);
+                    if (mouse_pos.x >= world_pos.x - half_size.x && mouse_pos.x <= world_pos.x + half_size.x &&
+                        mouse_pos.y >= world_pos.y - half_size.y && mouse_pos.y <= world_pos.y + half_size.y) {
+                        clicked = e;
+                    }
+                }
+            });
+            
+            state.selected_entity = clicked;
+        }
         
         ImGui::End();
     }
