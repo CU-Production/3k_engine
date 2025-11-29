@@ -83,6 +83,7 @@ struct Rigidbody {
 struct Script {
     std::string path;
     sol::table instance; // Lua table instance
+    sol::environment env; // Script environment with entity_id
     bool loaded;
     EntityId entity; // Reference to owner entity
     
@@ -400,18 +401,28 @@ struct ScriptSystem {
         try {
             sol::load_result loaded_script = lua->load(buffer.data());
             if (loaded_script.valid()) {
-                sol::protected_function_result result = loaded_script();
+                // Create environment for this script with entity_id and generation
+                script.env = sol::environment(*lua, sol::create, lua->globals());
+                script.env["entity_id"] = e.id;
+                script.env["entity_generation"] = e.generation;
+                
+                // Execute script in its own environment
+                sol::protected_function_result result = loaded_script(script.env);
                 if (result.valid()) {
                     script.instance = result;
                     script.loaded = true;
                     
-                    // Set entity reference in script
-                    script.instance["entity_id"] = e.id;
-                    
-                    // Call init if exists
+                    // Set environment for all script functions
                     sol::optional<sol::function> init_fn = script.instance["init"];
                     if (init_fn) {
+                        sol::set_environment(script.env, *init_fn);
                         (*init_fn)();
+                    }
+                    
+                    // Set environment for update function
+                    sol::optional<sol::function> update_fn = script.instance["update"];
+                    if (update_fn) {
+                        sol::set_environment(script.env, *update_fn);
                     }
                 }
             }
@@ -427,6 +438,9 @@ struct ScriptSystem {
             }
             
             if (sc.loaded && sc.instance.valid()) {
+                // Update entity_generation in environment before calling update
+                sc.env["entity_generation"] = e.generation;
+                
                 sol::optional<sol::function> update_fn = sc.instance["update"];
                 if (update_fn) {
                     try {
@@ -542,7 +556,7 @@ void init(void) {
 
     // Box2D world
     b2WorldDef wdef = b2DefaultWorldDef();
-    wdef.gravity = B2_LITERAL(b2Vec2){0.0f, -10.0f};
+    wdef.gravity = B2_LITERAL(b2Vec2){0.0f, -800.0f};
     state.world = b2CreateWorld(&wdef);
     state.accumulator = 0.0f;
 
@@ -561,8 +575,8 @@ void init(void) {
     state.lua->set_function("get_mouse_button", &InputSystem::get_mouse_button);
     
     // Bind component access to Lua
-    state.lua->set_function("get_transform", [](uint32_t entity_id) -> sol::optional<sol::table> {
-        EntityId e = {entity_id, 0}; // Simplified: assuming generation 0
+    state.lua->set_function("get_transform", [](uint32_t entity_id, uint32_t generation) -> sol::optional<sol::table> {
+        EntityId e = {entity_id, generation};
         Transform* t = state.registry.transforms.get(e);
         if (!t) return sol::nullopt;
         
@@ -573,8 +587,8 @@ void init(void) {
         return result;
     });
     
-    state.lua->set_function("set_transform", [](uint32_t entity_id, float x, float y) {
-        EntityId e = {entity_id, 0};
+    state.lua->set_function("set_transform", [](uint32_t entity_id, uint32_t generation, float x, float y) {
+        EntityId e = {entity_id, generation};
         Transform* t = state.registry.transforms.get(e);
         if (t) {
             t->position.X = x;
@@ -582,8 +596,8 @@ void init(void) {
         }
     });
     
-    state.lua->set_function("get_velocity", [](uint32_t entity_id) -> sol::optional<sol::table> {
-        EntityId e = {entity_id, 0};
+    state.lua->set_function("get_velocity", [](uint32_t entity_id, uint32_t generation) -> sol::optional<sol::table> {
+        EntityId e = {entity_id, generation};
         Rigidbody* rb = state.registry.rigidbodies.get(e);
         if (!rb || !b2Body_IsValid(rb->body)) return sol::nullopt;
         
@@ -594,24 +608,24 @@ void init(void) {
         return result;
     });
     
-    state.lua->set_function("set_velocity", [](uint32_t entity_id, float vx, float vy) {
-        EntityId e = {entity_id, 0};
+    state.lua->set_function("set_velocity", [](uint32_t entity_id, uint32_t generation, float vx, float vy) {
+        EntityId e = {entity_id, generation};
         Rigidbody* rb = state.registry.rigidbodies.get(e);
         if (rb && b2Body_IsValid(rb->body)) {
             b2Body_SetLinearVelocity(rb->body, b2Vec2{vx, vy});
         }
     });
     
-    state.lua->set_function("apply_impulse", [](uint32_t entity_id, float ix, float iy) {
-        EntityId e = {entity_id, 0};
+    state.lua->set_function("apply_impulse", [](uint32_t entity_id, uint32_t generation, float ix, float iy) {
+        EntityId e = {entity_id, generation};
         Rigidbody* rb = state.registry.rigidbodies.get(e);
         if (rb && b2Body_IsValid(rb->body)) {
             b2Body_ApplyLinearImpulseToCenter(rb->body, b2Vec2{ix, iy}, true);
         }
     });
     
-    state.lua->set_function("destroy_entity", [](uint32_t entity_id) {
-        EntityId e = {entity_id, 0};
+    state.lua->set_function("destroy_entity", [](uint32_t entity_id, uint32_t generation) {
+        EntityId e = {entity_id, generation};
         if (state.registry.valid(e)) {
             state.registry.destroy(e);
             log_console("Entity " + std::to_string(entity_id) + " destroyed by script");
