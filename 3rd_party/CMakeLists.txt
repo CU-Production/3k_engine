@@ -31,6 +31,8 @@ target_include_directories(stb INTERFACE stb)
 add_subdirectory(box2d)
 
 # physfs (library)
+set(PHYSFS_BUILD_DOCS OFF)
+set(PHYSFS_BUILD_TEST OFF)
 add_subdirectory(physfs)
 
 # nfd
