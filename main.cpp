@@ -11,6 +11,7 @@
 
 #define SOKOL_IMGUI_IMPL
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "util/sokol_imgui.h"
 #include "util/sokol_gfx_imgui.h"
 #include "box2d/box2d.h"
@@ -508,7 +509,8 @@ static bool show_viewport = true;
 static bool show_hierarchy = true;
 static bool show_inspector = true;
 static bool show_console = true;
-static bool show_assets = false;
+static bool show_assets = true;
+static bool first_frame = true;
 
 // Console log buffer
 static std::vector<std::string> console_logs;
@@ -553,70 +555,156 @@ void init(void) {
     // Enable docking
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.ConfigDockingWithShift = false;
     
-    // Apply professional dark theme
+    // =========== Professional Dark Theme (Inspired by modern IDEs) ===========
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 4.0f;
-    style.FrameRounding = 3.0f;
-    style.GrabRounding = 3.0f;
-    style.ScrollbarRounding = 3.0f;
-    style.TabRounding = 3.0f;
+    
+    // Rounding - subtle but modern
+    style.WindowRounding = 6.0f;
+    style.ChildRounding = 4.0f;
+    style.FrameRounding = 4.0f;
+    style.PopupRounding = 4.0f;
+    style.ScrollbarRounding = 6.0f;
+    style.GrabRounding = 4.0f;
+    style.TabRounding = 4.0f;
+    
+    // Borders
     style.WindowBorderSize = 1.0f;
-    style.FrameBorderSize = 0.0f;
-    style.PopupBorderSize = 1.0f;
     style.ChildBorderSize = 1.0f;
-    style.TabBorderSize = 1.0f;
+    style.PopupBorderSize = 1.0f;
+    style.FrameBorderSize = 0.0f;
+    style.TabBorderSize = 0.0f;
     
-    // Professional dark color scheme
+    // Padding and spacing
+    style.WindowPadding = ImVec2(10.0f, 10.0f);
+    style.FramePadding = ImVec2(8.0f, 4.0f);
+    style.CellPadding = ImVec2(6.0f, 4.0f);
+    style.ItemSpacing = ImVec2(8.0f, 6.0f);
+    style.ItemInnerSpacing = ImVec2(6.0f, 4.0f);
+    style.IndentSpacing = 16.0f;
+    style.ScrollbarSize = 12.0f;
+    style.GrabMinSize = 8.0f;
+    
+    // Alignment
+    style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
+    style.ButtonTextAlign = ImVec2(0.5f, 0.5f);
+    style.SeparatorTextAlign = ImVec2(0.0f, 0.5f);
+    
+    // =========== Color Palette ===========
+    // Base colors - Deep charcoal with subtle blue undertones
+    const ImVec4 bg_darkest   = ImVec4(0.067f, 0.071f, 0.082f, 1.00f);  // #11121a
+    const ImVec4 bg_darker    = ImVec4(0.098f, 0.102f, 0.118f, 1.00f);  // #191a1e
+    const ImVec4 bg_dark      = ImVec4(0.125f, 0.129f, 0.149f, 1.00f);  // #202126
+    const ImVec4 bg_mid       = ImVec4(0.161f, 0.165f, 0.192f, 1.00f);  // #292a31
+    const ImVec4 bg_light     = ImVec4(0.200f, 0.208f, 0.239f, 1.00f);  // #33353d
+    
+    // Accent - Vibrant teal/cyan
+    const ImVec4 accent       = ImVec4(0.259f, 0.714f, 0.776f, 1.00f);  // #42b6c6
+    const ImVec4 accent_hover = ImVec4(0.318f, 0.784f, 0.847f, 1.00f);  // #51c8d8
+    const ImVec4 accent_dim   = ImVec4(0.200f, 0.502f, 0.549f, 1.00f);  // #33808c
+    
+    // Text colors
+    const ImVec4 text_bright  = ImVec4(0.925f, 0.937f, 0.957f, 1.00f);  // #eceff4
+    const ImVec4 text_normal  = ImVec4(0.816f, 0.831f, 0.863f, 1.00f);  // #d0d4dc
+    const ImVec4 text_dim     = ImVec4(0.502f, 0.525f, 0.576f, 1.00f);  // #808693
+    
+    // Borders
+    const ImVec4 border_color = ImVec4(0.220f, 0.227f, 0.263f, 1.00f);  // #383a43
+    const ImVec4 border_light = ImVec4(0.290f, 0.298f, 0.341f, 1.00f);  // #4a4c57
+    
     ImVec4* colors = style.Colors;
-    colors[ImGuiCol_Text] = ImVec4(0.95f, 0.95f, 0.95f, 1.00f);
-    colors[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
-    colors[ImGuiCol_WindowBg] = ImVec4(0.13f, 0.13f, 0.13f, 1.00f);
-    colors[ImGuiCol_ChildBg] = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
-    colors[ImGuiCol_PopupBg] = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
-    colors[ImGuiCol_Border] = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
-    colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-    colors[ImGuiCol_FrameBg] = ImVec4(0.20f, 0.20f, 0.20f, 1.00f);
-    colors[ImGuiCol_FrameBgHovered] = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
-    colors[ImGuiCol_FrameBgActive] = ImVec4(0.30f, 0.30f, 0.30f, 1.00f);
-    colors[ImGuiCol_TitleBg] = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
-    colors[ImGuiCol_TitleBgActive] = ImVec4(0.20f, 0.20f, 0.20f, 1.00f);
-    colors[ImGuiCol_TitleBgCollapsed] = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
-    colors[ImGuiCol_MenuBarBg] = ImVec4(0.18f, 0.18f, 0.18f, 1.00f);
-    colors[ImGuiCol_ScrollbarBg] = ImVec4(0.10f, 0.10f, 0.10f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.35f, 0.35f, 0.35f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.45f, 0.45f, 0.45f, 1.00f);
-    colors[ImGuiCol_ScrollbarGrabActive] = ImVec4(0.55f, 0.55f, 0.55f, 1.00f);
-    colors[ImGuiCol_CheckMark] = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
-    colors[ImGuiCol_SliderGrab] = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
-    colors[ImGuiCol_SliderGrabActive] = ImVec4(0.35f, 0.68f, 1.00f, 1.00f);
-    colors[ImGuiCol_Button] = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
-    colors[ImGuiCol_ButtonHovered] = ImVec4(0.35f, 0.35f, 0.35f, 1.00f);
-    colors[ImGuiCol_ButtonActive] = ImVec4(0.45f, 0.45f, 0.45f, 1.00f);
-    colors[ImGuiCol_Header] = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
-    colors[ImGuiCol_HeaderHovered] = ImVec4(0.35f, 0.35f, 0.35f, 1.00f);
-    colors[ImGuiCol_HeaderActive] = ImVec4(0.45f, 0.45f, 0.45f, 1.00f);
-    colors[ImGuiCol_Separator] = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
-    colors[ImGuiCol_SeparatorHovered] = ImVec4(0.35f, 0.35f, 0.35f, 1.00f);
-    colors[ImGuiCol_SeparatorActive] = ImVec4(0.45f, 0.45f, 0.45f, 1.00f);
-    colors[ImGuiCol_ResizeGrip] = ImVec4(0.30f, 0.30f, 0.30f, 1.00f);
-    colors[ImGuiCol_ResizeGripHovered] = ImVec4(0.40f, 0.40f, 0.40f, 1.00f);
-    colors[ImGuiCol_ResizeGripActive] = ImVec4(0.50f, 0.50f, 0.50f, 1.00f);
-    colors[ImGuiCol_Tab] = ImVec4(0.20f, 0.20f, 0.20f, 1.00f);
-    colors[ImGuiCol_TabHovered] = ImVec4(0.30f, 0.30f, 0.30f, 1.00f);
-    colors[ImGuiCol_TabActive] = ImVec4(0.25f, 0.25f, 0.25f, 1.00f);
-    colors[ImGuiCol_DockingPreview] = ImVec4(0.26f, 0.59f, 0.98f, 0.70f);
-    colors[ImGuiCol_DragDropTarget] = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
-    colors[ImGuiCol_NavHighlight] = ImVec4(0.26f, 0.59f, 0.98f, 1.00f);
-    colors[ImGuiCol_NavWindowingHighlight] = ImVec4(1.00f, 1.00f, 1.00f, 0.70f);
-    colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.20f);
-    colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.35f);
     
-    style.ItemSpacing = ImVec2(8.0f, 4.0f);
-    style.ItemInnerSpacing = ImVec2(4.0f, 4.0f);
-    style.IndentSpacing = 20.0f;
-    style.ScrollbarSize = 14.0f;
-    style.GrabMinSize = 10.0f;
+    // Text
+    colors[ImGuiCol_Text]                  = text_bright;
+    colors[ImGuiCol_TextDisabled]          = text_dim;
+    
+    // Backgrounds
+    colors[ImGuiCol_WindowBg]              = bg_dark;
+    colors[ImGuiCol_ChildBg]               = bg_darker;
+    colors[ImGuiCol_PopupBg]               = bg_mid;
+    colors[ImGuiCol_Border]                = border_color;
+    colors[ImGuiCol_BorderShadow]          = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    
+    // Frames (input fields, sliders, etc.)
+    colors[ImGuiCol_FrameBg]               = bg_darker;
+    colors[ImGuiCol_FrameBgHovered]        = bg_mid;
+    colors[ImGuiCol_FrameBgActive]         = bg_light;
+    
+    // Title bar
+    colors[ImGuiCol_TitleBg]               = bg_darkest;
+    colors[ImGuiCol_TitleBgActive]         = bg_darker;
+    colors[ImGuiCol_TitleBgCollapsed]      = bg_darkest;
+    
+    // Menu bar
+    colors[ImGuiCol_MenuBarBg]             = bg_darker;
+    
+    // Scrollbar
+    colors[ImGuiCol_ScrollbarBg]           = bg_darker;
+    colors[ImGuiCol_ScrollbarGrab]         = bg_light;
+    colors[ImGuiCol_ScrollbarGrabHovered]  = border_light;
+    colors[ImGuiCol_ScrollbarGrabActive]   = accent_dim;
+    
+    // Interactive elements
+    colors[ImGuiCol_CheckMark]             = accent;
+    colors[ImGuiCol_SliderGrab]            = accent;
+    colors[ImGuiCol_SliderGrabActive]      = accent_hover;
+    
+    // Buttons
+    colors[ImGuiCol_Button]                = bg_mid;
+    colors[ImGuiCol_ButtonHovered]         = bg_light;
+    colors[ImGuiCol_ButtonActive]          = accent_dim;
+    
+    // Headers (collapsing headers, tree nodes, selectables)
+    colors[ImGuiCol_Header]                = bg_mid;
+    colors[ImGuiCol_HeaderHovered]         = ImVec4(accent.x, accent.y, accent.z, 0.25f);
+    colors[ImGuiCol_HeaderActive]          = ImVec4(accent.x, accent.y, accent.z, 0.40f);
+    
+    // Separator
+    colors[ImGuiCol_Separator]             = border_color;
+    colors[ImGuiCol_SeparatorHovered]      = accent_dim;
+    colors[ImGuiCol_SeparatorActive]       = accent;
+    
+    // Resize grip
+    colors[ImGuiCol_ResizeGrip]            = ImVec4(accent.x, accent.y, accent.z, 0.20f);
+    colors[ImGuiCol_ResizeGripHovered]     = ImVec4(accent.x, accent.y, accent.z, 0.50f);
+    colors[ImGuiCol_ResizeGripActive]      = accent;
+    
+    // Tabs
+    colors[ImGuiCol_Tab]                   = bg_darker;
+    colors[ImGuiCol_TabHovered]            = ImVec4(accent.x, accent.y, accent.z, 0.40f);
+    colors[ImGuiCol_TabActive]             = bg_mid;
+    colors[ImGuiCol_TabUnfocused]          = bg_darkest;
+    colors[ImGuiCol_TabUnfocusedActive]    = bg_darker;
+    
+    // Docking
+    colors[ImGuiCol_DockingPreview]        = ImVec4(accent.x, accent.y, accent.z, 0.60f);
+    colors[ImGuiCol_DockingEmptyBg]        = bg_darkest;
+    
+    // Drag drop
+    colors[ImGuiCol_DragDropTarget]        = accent;
+    
+    // Navigation
+    colors[ImGuiCol_NavHighlight]          = accent;
+    colors[ImGuiCol_NavWindowingHighlight] = ImVec4(1.0f, 1.0f, 1.0f, 0.70f);
+    colors[ImGuiCol_NavWindowingDimBg]     = ImVec4(0.8f, 0.8f, 0.8f, 0.15f);
+    colors[ImGuiCol_ModalWindowDimBg]      = ImVec4(0.0f, 0.0f, 0.0f, 0.60f);
+    
+    // Tables
+    colors[ImGuiCol_TableHeaderBg]         = bg_mid;
+    colors[ImGuiCol_TableBorderStrong]     = border_color;
+    colors[ImGuiCol_TableBorderLight]      = border_color;
+    colors[ImGuiCol_TableRowBg]            = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    colors[ImGuiCol_TableRowBgAlt]         = ImVec4(1.0f, 1.0f, 1.0f, 0.02f);
+    
+    // Plot
+    colors[ImGuiCol_PlotLines]             = accent;
+    colors[ImGuiCol_PlotLinesHovered]      = accent_hover;
+    colors[ImGuiCol_PlotHistogram]         = accent;
+    colors[ImGuiCol_PlotHistogramHovered]  = accent_hover;
+    
+    // Text selection
+    colors[ImGuiCol_TextSelectedBg]        = ImVec4(accent.x, accent.y, accent.z, 0.35f);
 
     // Box2D world
     b2WorldDef wdef = b2DefaultWorldDef();
@@ -783,6 +871,29 @@ void frame(void) {
     // DockSpace
     ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
     ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_None);
+    
+    // Setup default layout on first frame
+    if (first_frame) {
+        first_frame = false;
+        ImGui::DockBuilderRemoveNode(dockspace_id);
+        ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(dockspace_id, viewport->Size);
+        
+        // Split layout: Left(Hierarchy) | Center(Viewport) | Right(Inspector)
+        ImGuiID dock_main = dockspace_id;
+        ImGuiID dock_left = ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Left, 0.18f, nullptr, &dock_main);
+        ImGuiID dock_right = ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Right, 0.22f, nullptr, &dock_main);
+        ImGuiID dock_bottom = ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Down, 0.25f, nullptr, &dock_main);
+        
+        // Assign windows to docks
+        ImGui::DockBuilderDockWindow("Hierarchy", dock_left);
+        ImGui::DockBuilderDockWindow("Inspector", dock_right);
+        ImGui::DockBuilderDockWindow("Console", dock_bottom);
+        ImGui::DockBuilderDockWindow("Assets", dock_bottom);
+        ImGui::DockBuilderDockWindow("Viewport", dock_main);
+        
+        ImGui::DockBuilderFinish(dockspace_id);
+    }
     // Menu Bar
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
@@ -867,146 +978,196 @@ void frame(void) {
         
         sgimgui_draw_menu(&state.sgimgui, "Graphics");
         
-        // Status indicator with better styling
-        ImGui::Separator();
-        float status_width = 120.0f;
-        ImGui::SetCursorPosX(ImGui::GetWindowWidth() - status_width - 20.0f);
+        // Centered Play/Stop controls
+        float button_width = 80.0f;
+        float center_x = (ImGui::GetWindowWidth() - button_width * 2 - 8.0f) * 0.5f;
+        ImGui::SetCursorPosX(center_x);
         
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 2.0f));
-        if (state.play_mode) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 0.3f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.6f, 0.2f, 0.5f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
-            ImGui::Button("  PLAYING  ");
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 3.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        
+        if (!state.play_mode) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.55f, 0.34f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.65f, 0.40f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.45f, 0.28f, 1.0f));
+            if (ImGui::Button("Play", ImVec2(button_width, 0))) {
+                SceneSerializer::save("_temp_editor_state.txt", state.registry);
+                state.play_mode = true;
+                log_console("Entering Play mode");
+            }
             ImGui::PopStyleColor(3);
         } else {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.5f, 0.2f, 0.3f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.6f, 0.5f, 0.2f, 0.5f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.9f, 0.4f, 1.0f));
-            ImGui::Button("  EDITING  ");
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.70f, 0.25f, 0.25f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f, 0.32f, 0.32f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.20f, 0.20f, 1.0f));
+            if (ImGui::Button("Stop", ImVec2(button_width, 0))) {
+                state.play_mode = false;
+                std::vector<EntityId> to_delete;
+                state.registry.transforms.each([&](EntityId e, Transform& t) {
+                    to_delete.push_back(e);
+                });
+                for (auto e : to_delete) {
+                    state.registry.destroy(e);
+                }
+                state.selected_entity = NULL_ENTITY;
+                SceneSerializer::load("_temp_editor_state.txt", state.registry, state.world);
+                log_console("Exiting Play mode");
+            }
             ImGui::PopStyleColor(3);
         }
-        ImGui::PopStyleVar();
+        
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.40f, 0.50f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.42f, 0.48f, 0.58f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.30f, 0.35f, 0.45f, 1.0f));
+        if (ImGui::Button("Pause", ImVec2(button_width, 0))) {
+            // Future pause functionality
+        }
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar(2);
         
         ImGui::EndMenuBar();
     }
     
     ImGui::End(); // DockSpace
     
-    // Professional Toolbar
-    ImGui::Begin("Toolbar", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground);
-    ImGui::SetWindowPos(ImVec2(viewport->WorkPos.x, viewport->WorkPos.y + ImGui::GetFrameHeight()));
-    ImGui::SetWindowSize(ImVec2(viewport->WorkSize.x, 40));
+    // =========== Professional Status Bar ===========
+    const float statusbar_height = 24.0f;
+    ImGui::SetNextWindowPos(ImVec2(viewport->Pos.x, viewport->Pos.y + viewport->Size.y - statusbar_height));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, statusbar_height));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 4.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.082f, 0.095f, 1.0f));
     
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 6.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 0.0f));
+    ImGui::Begin("##StatusBar", nullptr, 
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | 
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoNav);
     
-    // Play/Stop button with better styling
-    ImGui::SetCursorPosY(5);
-    if (!state.play_mode) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.7f, 0.3f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.1f, 0.5f, 0.1f, 1.0f));
-        if (ImGui::Button("  Play  ", ImVec2(70, 30))) {
-            SceneSerializer::save("_temp_editor_state.txt", state.registry);
-            state.play_mode = true;
-            log_console("Entering Play mode");
-        }
-        ImGui::PopStyleColor(3);
+    // Left side: Mode indicator with colored badge
+    if (state.play_mode) {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.65f, 0.35f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.7f, 0.4f, 1.0f));
+        ImGui::SmallButton(" PLAYING ");
+        ImGui::PopStyleColor(2);
     } else {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.2f, 0.2f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.3f, 0.3f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
-        if (ImGui::Button("  Stop  ", ImVec2(70, 30))) {
-            state.play_mode = false;
-            std::vector<EntityId> to_delete;
-            state.registry.transforms.each([&](EntityId e, Transform& t) {
-                to_delete.push_back(e);
-            });
-            for (auto e : to_delete) {
-                state.registry.destroy(e);
-            }
-            state.selected_entity = NULL_ENTITY;
-            SceneSerializer::load("_temp_editor_state.txt", state.registry, state.world);
-            log_console("Exiting Play mode");
-        }
-        ImGui::PopStyleColor(3);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.26f, 0.52f, 0.72f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.58f, 0.78f, 1.0f));
+        ImGui::SmallButton(" EDITOR ");
+        ImGui::PopStyleColor(2);
     }
     
     ImGui::SameLine();
-    ImGui::Text(" | ");
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.52f, 0.58f, 1.0f));
+    ImGui::Text("|");
     ImGui::SameLine();
-    ImGui::SetCursorPosY(12);
     
-    // Stats
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
-    ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-    ImGui::SameLine();
-    ImGui::Text(" | ");
-    ImGui::SameLine();
+    // Scene path
+    ImGui::Text("Scene: %s", state.current_scene_path.empty() ? "Untitled" : state.current_scene_path.c_str());
+    
+    // Right side stats
+    float right_offset = viewport->Size.x - 280.0f;
+    ImGui::SameLine(right_offset);
     ImGui::Text("Entities: %d", (int)state.registry.transforms.entities.size());
+    ImGui::SameLine();
+    ImGui::Text("|");
+    ImGui::SameLine();
+    ImGui::Text("FPS: %.0f (%.2fms)", ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
     ImGui::PopStyleColor();
     
-    ImGui::PopStyleVar(2);
     ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
 
     // 1. Hierarchy panel
     if (show_hierarchy && !state.play_mode) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
         ImGui::Begin("Hierarchy", &show_hierarchy);
+        ImGui::PopStyleVar();
         
-        // Toolbar buttons
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 4.0f));
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.5f, 0.2f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.6f, 0.3f, 1.0f));
-        if (ImGui::Button("+ Create", ImVec2(-1, 0))) {
+        // Toolbar with modern styling
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.0f, 5.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.55f, 0.42f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.62f, 0.48f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.17f, 0.48f, 0.36f, 1.0f));
+        if (ImGui::Button("+ New Entity", ImVec2(-1, 0))) {
             EntityId new_entity = state.registry.create();
             state.registry.transforms.add(new_entity, Transform());
+            state.selected_entity = new_entity;
             log_console("Created entity " + std::to_string(new_entity.id));
         }
-        ImGui::PopStyleColor(2);
+        ImGui::PopStyleColor(3);
         
         if (state.selected_entity != NULL_ENTITY) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.2f, 0.2f, 0.8f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.3f, 0.3f, 1.0f));
-            if (ImGui::Button("Delete", ImVec2(-1, 0))) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.65f, 0.28f, 0.28f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.75f, 0.35f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.55f, 0.22f, 0.22f, 1.0f));
+            if (ImGui::Button("Delete Selected", ImVec2(-1, 0))) {
                 state.registry.destroy(state.selected_entity);
                 log_console("Deleted entity " + std::to_string(state.selected_entity.id));
                 state.selected_entity = NULL_ENTITY;
             }
-            ImGui::PopStyleColor(2);
+            ImGui::PopStyleColor(3);
         }
         ImGui::PopStyleVar();
         
+        ImGui::Spacing();
         ImGui::Separator();
+        ImGui::Spacing();
         
-        // Entity count header
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-        ImGui::Text("Entities (%d)", (int)state.registry.transforms.entities.size());
+        // Search/Filter header
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.58f, 0.65f, 1.0f));
+        ImGui::Text("SCENE ENTITIES");
         ImGui::PopStyleColor();
-        ImGui::Separator();
+        ImGui::SameLine(ImGui::GetWindowWidth() - 45);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.26f, 0.71f, 0.78f, 1.0f));
+        ImGui::Text("(%d)", (int)state.registry.transforms.entities.size());
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
         
-        // Entity list with better icons and styling
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 2.0f));
+        // Entity list with modern styling
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 4.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 4.0f));
+        
+        ImGui::BeginChild("EntityList", ImVec2(0, 0), false);
         state.registry.transforms.each([&](EntityId e, Transform& t) {
-            // Determine icon based on components (using simple ASCII)
-            const char* icon = "[E]"; // Default entity
-            if (state.registry.cameras.has(e)) icon = "[C]"; // Camera
-            else if (state.registry.rigidbodies.has(e) && state.registry.sprites.has(e)) icon = "[P]"; // Physics + Sprite
-            else if (state.registry.sprites.has(e)) icon = "[S]"; // Sprite
-            else if (state.registry.rigidbodies.has(e)) icon = "[R]"; // Rigidbody only
+            // Modern icon based on components
+            const char* icon = "o";  // Default entity
+            ImVec4 icon_color = ImVec4(0.5f, 0.55f, 0.6f, 1.0f);
             
-            char label[128];
-            snprintf(label, sizeof(label), "%s Entity_%u", icon, e.id);
-            
-            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_SpanAvailWidth;
-            if (e == state.selected_entity) {
-                flags |= ImGuiTreeNodeFlags_Selected;
-                ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.26f, 0.59f, 0.98f, 0.4f));
-                ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.26f, 0.59f, 0.98f, 0.6f));
+            if (state.registry.cameras.has(e)) {
+                icon = "#"; icon_color = ImVec4(0.9f, 0.75f, 0.3f, 1.0f);
+            } else if (state.registry.rigidbodies.has(e) && state.registry.sprites.has(e)) {
+                icon = "@"; icon_color = ImVec4(0.45f, 0.78f, 0.65f, 1.0f);
+            } else if (state.registry.sprites.has(e)) {
+                icon = "*"; icon_color = ImVec4(0.65f, 0.5f, 0.85f, 1.0f);
+            } else if (state.registry.rigidbodies.has(e)) {
+                icon = "&"; icon_color = ImVec4(0.85f, 0.55f, 0.4f, 1.0f);
             }
             
-            ImGui::TreeNodeEx(label, flags);
-            if (e == state.selected_entity) {
+            bool is_selected = (e == state.selected_entity);
+            
+            ImGui::PushID(e.id);
+            
+            // Selection highlight
+            if (is_selected) {
+                ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.26f, 0.71f, 0.78f, 0.35f));
+                ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.26f, 0.71f, 0.78f, 0.50f));
+            }
+            
+            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen | 
+                                       ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
+            if (is_selected) flags |= ImGuiTreeNodeFlags_Selected;
+            
+            // Colored icon + Entity name
+            ImGui::PushStyleColor(ImGuiCol_Text, icon_color);
+            ImGui::TreeNodeEx("##node", flags);
+            ImGui::SameLine(0, 0);
+            ImGui::Text(" %s ", icon);
+            ImGui::PopStyleColor();
+            ImGui::SameLine(0, 0);
+            ImGui::Text("Entity_%u", e.id);
+            
+            if (is_selected) {
                 ImGui::PopStyleColor(2);
             }
             
@@ -1014,10 +1175,11 @@ void frame(void) {
                 state.selected_entity = e;
             }
             
-            // Note: No TreePop() needed when using ImGuiTreeNodeFlags_NoTreePushOnOpen and ImGuiTreeNodeFlags_Leaf
+            ImGui::PopID();
         });
-        ImGui::PopStyleVar();
+        ImGui::EndChild();
         
+        ImGui::PopStyleVar(2);
         ImGui::End();
     }
     
@@ -1264,7 +1426,9 @@ void frame(void) {
     // 3. Viewport window
     if (show_viewport) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.082f, 0.095f, 1.0f));
         ImGui::Begin("Viewport", &show_viewport);
+        ImGui::PopStyleColor();
         ImGui::PopStyleVar();
         
         // Get viewport draw list and window bounds
@@ -1275,29 +1439,32 @@ void frame(void) {
         if (canvas_sz.y < 50.0f) canvas_sz.y = 50.0f;
         ImVec2 canvas_p1 = ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y);
         
-        // Draw background with professional checkerboard pattern
-        ImU32 bg_color1 = IM_COL32(30, 30, 30, 255);
-        ImU32 bg_color2 = IM_COL32(35, 35, 35, 255);
-        const float CHECKER_SIZE = 20.0f;
-        for (float y = canvas_p0.y; y < canvas_p1.y; y += CHECKER_SIZE) {
-            for (float x = canvas_p0.x; x < canvas_p1.x; x += CHECKER_SIZE) {
-                bool checker = ((int)(x / CHECKER_SIZE) + (int)(y / CHECKER_SIZE)) % 2 == 0;
-                dl->AddRectFilled(ImVec2(x, y), ImVec2(x + CHECKER_SIZE, y + CHECKER_SIZE), 
-                                 checker ? bg_color1 : bg_color2);
+        // Modern dark gradient background
+        ImU32 bg_top = IM_COL32(18, 20, 25, 255);
+        ImU32 bg_bottom = IM_COL32(12, 14, 18, 255);
+        dl->AddRectFilledMultiColor(canvas_p0, canvas_p1, bg_top, bg_top, bg_bottom, bg_bottom);
+        
+        // Subtle dot grid pattern (more professional than checkerboard)
+        const float DOT_SPACING = 32.0f;
+        ImU32 dot_color = IM_COL32(60, 65, 75, 80);
+        ImVec2 center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+        float start_x = center.x - floorf((center.x - canvas_p0.x) / DOT_SPACING) * DOT_SPACING;
+        float start_y = center.y - floorf((center.y - canvas_p0.y) / DOT_SPACING) * DOT_SPACING;
+        for (float y = start_y; y < canvas_p1.y; y += DOT_SPACING) {
+            for (float x = start_x; x < canvas_p1.x; x += DOT_SPACING) {
+                dl->AddCircleFilled(ImVec2(x, y), 1.2f, dot_color);
             }
         }
-        dl->AddRect(canvas_p0, canvas_p1, IM_COL32(60, 60, 60, 255), 0.0f, 0, 2.0f);
         
-        // Professional grid
-        const float GRID_STEP = 64.0f;
-        ImU32 grid_color = IM_COL32(80, 80, 80, 60);
-        for (float x = fmodf(canvas_p0.x, GRID_STEP); x < canvas_p1.x; x += GRID_STEP)
-            dl->AddLine(ImVec2(x, canvas_p0.y), ImVec2(x, canvas_p1.y), grid_color);
-        for (float y = fmodf(canvas_p0.y, GRID_STEP); y < canvas_p1.y; y += GRID_STEP)
-            dl->AddLine(ImVec2(canvas_p0.x, y), ImVec2(canvas_p1.x, y), grid_color);
+        // Center crosshair (origin indicator)
+        ImU32 axis_color_x = IM_COL32(180, 80, 80, 120);
+        ImU32 axis_color_y = IM_COL32(80, 180, 80, 120);
+        dl->AddLine(ImVec2(center.x - 40, center.y), ImVec2(center.x + 40, center.y), axis_color_x, 1.5f);
+        dl->AddLine(ImVec2(center.x, center.y - 40), ImVec2(center.x, center.y + 40), axis_color_y, 1.5f);
+        dl->AddCircle(center, 4.0f, IM_COL32(100, 100, 100, 150), 12, 1.0f);
         
         // Render all entities with Transform + Sprite
-        ImVec2 viewport_center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+        ImVec2 viewport_center = center;
         state.registry.transforms.each([&](EntityId e, Transform& t) {
             Sprite* sprite = state.registry.sprites.get(e);
             if (sprite) {
@@ -1371,39 +1538,60 @@ void frame(void) {
     
     // 4. Console window
     if (show_console) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
         ImGui::Begin("Console", &show_console);
+        ImGui::PopStyleVar();
         
-        // Console toolbar
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 4.0f));
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 0.8f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.4f, 0.4f, 0.4f, 1.0f));
-        if (ImGui::Button("Clear", ImVec2(60, 0))) {
+        // Modern console toolbar
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 4.0f));
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.27f, 0.32f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.32f, 0.35f, 0.40f, 1.0f));
+        if (ImGui::Button("Clear")) {
             console_logs.clear();
         }
         ImGui::PopStyleColor(2);
         ImGui::SameLine();
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-        ImGui::Text("Messages: %d", (int)console_logs.size());
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.50f, 0.53f, 0.58f, 1.0f));
+        ImGui::Text("|  %d messages", (int)console_logs.size());
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
         
+        ImGui::Spacing();
         ImGui::Separator();
+        ImGui::Spacing();
         
-        // Console content with better styling
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 2.0f));
-        ImGui::BeginChild("ScrollingRegion", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
+        // Console content with modern styling
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 3.0f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.067f, 0.071f, 0.082f, 1.0f));
+        ImGui::BeginChild("ScrollingRegion", ImVec2(0, 0), true, ImGuiWindowFlags_HorizontalScrollbar);
         
-        for (const auto& log : console_logs) {
-            ImVec4 color = ImVec4(0.9f, 0.9f, 0.9f, 1.0f);
+        for (size_t i = 0; i < console_logs.size(); ++i) {
+            const auto& log = console_logs[i];
+            ImVec4 color = ImVec4(0.82f, 0.84f, 0.87f, 1.0f);
+            const char* prefix = "  ";
+            
             if (log.find("[Lua]") != std::string::npos) {
-                color = ImVec4(0.4f, 0.7f, 1.0f, 1.0f);
+                color = ImVec4(0.42f, 0.72f, 0.95f, 1.0f);
+                prefix = ">";
             } else if (log.find("Error") != std::string::npos || log.find("Failed") != std::string::npos) {
-                color = ImVec4(1.0f, 0.4f, 0.4f, 1.0f);
-            } else if (log.find("Created") != std::string::npos || log.find("Entering") != std::string::npos || log.find("Loaded") != std::string::npos) {
-                color = ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
+                color = ImVec4(0.95f, 0.45f, 0.45f, 1.0f);
+                prefix = "!";
+            } else if (log.find("Created") != std::string::npos || log.find("Entering") != std::string::npos || 
+                       log.find("Loaded") != std::string::npos || log.find("initialized") != std::string::npos) {
+                color = ImVec4(0.45f, 0.85f, 0.55f, 1.0f);
+                prefix = "+";
             } else if (log.find("Warning") != std::string::npos) {
-                color = ImVec4(1.0f, 0.8f, 0.3f, 1.0f);
+                color = ImVec4(0.95f, 0.78f, 0.35f, 1.0f);
+                prefix = "~";
+            } else if (log.find("Deleted") != std::string::npos || log.find("Exiting") != std::string::npos) {
+                color = ImVec4(0.85f, 0.65f, 0.45f, 1.0f);
+                prefix = "-";
             }
+            
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 0.42f, 0.48f, 1.0f));
+            ImGui::Text("%s", prefix);
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, color);
             ImGui::TextWrapped("%s", log.c_str());
             ImGui::PopStyleColor();
@@ -1414,32 +1602,64 @@ void frame(void) {
             ImGui::SetScrollHereY(1.0f);
         
         ImGui::EndChild();
+        ImGui::PopStyleColor();
         ImGui::PopStyleVar();
         ImGui::End();
     }
     
     // 5. Assets window
     if (show_assets) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
         ImGui::Begin("Assets", &show_assets);
+        ImGui::PopStyleVar();
         
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.6f, 1.0f));
-        ImGui::Text("Asset Browser");
+        // Header
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.58f, 0.65f, 1.0f));
+        ImGui::Text("ASSET BROWSER");
         ImGui::PopStyleColor();
-        ImGui::Separator();
         
-        ImGui::Text("Textures: %d", (int)AssetManager::textures.size());
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        // Textures section
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.65f, 0.5f, 0.85f, 1.0f));
+        ImGui::Text("Textures");
+        ImGui::PopStyleColor();
+        ImGui::SameLine(ImGui::GetWindowWidth() - 40);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.26f, 0.71f, 0.78f, 1.0f));
+        ImGui::Text("(%d)", (int)AssetManager::textures.size());
+        ImGui::PopStyleColor();
+        
+        ImGui::Indent(10.0f);
         if (!AssetManager::textures.empty()) {
-            ImGui::Separator();
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 2.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 4.0f));
             for (const auto& pair : AssetManager::textures) {
-                ImGui::Text("  %s", pair.first.c_str());
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.78f, 0.80f, 0.84f, 1.0f));
+                ImGui::BulletText("%s", pair.first.c_str());
+                ImGui::PopStyleColor();
             }
             ImGui::PopStyleVar();
         } else {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
-            ImGui::Text("No assets loaded");
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.47f, 0.52f, 1.0f));
+            ImGui::Text("No textures loaded");
             ImGui::PopStyleColor();
         }
+        ImGui::Unindent(10.0f);
+        
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        // Scripts section (future)
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.78f, 0.65f, 1.0f));
+        ImGui::Text("Scripts");
+        ImGui::PopStyleColor();
+        ImGui::Indent(10.0f);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.47f, 0.52f, 1.0f));
+        ImGui::Text("Drag & drop .lua files here");
+        ImGui::PopStyleColor();
+        ImGui::Unindent(10.0f);
         
         ImGui::End();
     }
@@ -1528,10 +1748,11 @@ sapp_desc sokol_main(int argc, char* argv[]) {
     _sapp_desc.frame_cb = frame;
     _sapp_desc.cleanup_cb = cleanup;
     _sapp_desc.event_cb = event;
-    _sapp_desc.width = 1280;
-    _sapp_desc.height = 720;
-    _sapp_desc.window_title = "sokol-app";
+    _sapp_desc.width = 1440;
+    _sapp_desc.height = 900;
+    _sapp_desc.window_title = "3K Engine - 2D Game Editor";
     _sapp_desc.icon.sokol_default = true;
     _sapp_desc.logger.func = slog_func;
+    _sapp_desc.high_dpi = true;
     return _sapp_desc;
 }
